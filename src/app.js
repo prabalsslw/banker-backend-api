@@ -49,6 +49,7 @@ app.use('/api/health', require('./routes/health'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/profile', require('./routes/profile'));
 app.use('/api/savings', require('./routes/savings'));
+app.use('/api/five-year-savings', require('./routes/fiveYearSavings'));
 app.use('/api/todos', require('./routes/todos'));
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/notifications', require('./routes/notifications'));

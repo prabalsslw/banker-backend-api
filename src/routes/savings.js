@@ -11,14 +11,14 @@ router.use(authenticate);
 function validateSaving(body, partial = false) {
   const errors = [];
   const schemeType = body.schemeType || 'Sanchaypatra';
-  if (!['Sanchaypatra', 'Five-Year Bangladesh Sanchaypatra'].includes(schemeType)) errors.push('schemeType is not supported yet.');
+  if (schemeType !== 'Sanchaypatra') errors.push('This endpoint is only for 3-monthly Sanchayapatra. Use /api/five-year-savings for the five-year scheme.');
   for (const key of ['savingsId', 'amount', 'interestRate', 'issueDate', 'matureDate', 'status']) if (!partial && body[key] === undefined) errors.push(`${key} is required.`);
   if (!partial && schemeType === 'Sanchaypatra' && body.tenure === undefined) errors.push('tenure is required for 3-monthly Sanchaypatra.');
   if (body.savingsId !== undefined && !isNonEmptyString(body.savingsId, 80)) errors.push('savingsId must be a non-empty string up to 80 characters.');
   if (body.amount !== undefined && (!Number.isFinite(Number(body.amount)) || Number(body.amount) < 0)) errors.push('amount must be a non-negative number.');
   if (body.interestRate !== undefined && (!Number.isFinite(Number(body.interestRate)) || Number(body.interestRate) < 0)) errors.push('interestRate must be a non-negative number.');
   if (body.tenure !== undefined && (!Number.isInteger(Number(body.tenure)) || Number(body.tenure) < 1)) errors.push('tenure must be a positive integer.');
-  if (body.schemeType !== undefined && !['Sanchaypatra', 'Five-Year Bangladesh Sanchaypatra'].includes(body.schemeType)) errors.push('schemeType is not supported yet.');
+  if (body.schemeType !== undefined && body.schemeType !== 'Sanchaypatra') errors.push('This endpoint is only for 3-monthly Sanchayapatra. Use /api/five-year-savings for the five-year scheme.');
   for (const key of ['issueDate', 'matureDate']) if (body[key] !== undefined && !parseDate(body[key])) errors.push(`${key} must be a valid date.`);
   if (body.issueDate !== undefined && body.matureDate !== undefined && parseDate(body.matureDate) && parseDate(body.issueDate) && parseDate(body.matureDate) < parseDate(body.issueDate)) errors.push('matureDate must be on or after issueDate.');
   if (body.status !== undefined && !['Active', 'Matured', 'Inactive'].includes(body.status)) errors.push('status must be Active, Matured, or Inactive.');
