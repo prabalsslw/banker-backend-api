@@ -10,7 +10,7 @@ const fiveYearSavingSchema = new mongoose.Schema({
   interestRateEncrypted: { type: String, required: true, select: false },
   issueDate: { type: Date, required: true },
   matureDate: { type: Date, required: true },
-  status: { type: String, enum: ['Active', 'Matured', 'Inactive'], default: 'Active' }
+  status: { type: String, enum: ['Active', 'Matured', 'Closed', 'Inactive'], default: 'Active' }
 }, { timestamps: true, versionKey: false, collection: 'five_year_savings' });
 
 fiveYearSavingSchema.index({ ownerId: 1, savingsIdLookup: 1 }, { unique: true });

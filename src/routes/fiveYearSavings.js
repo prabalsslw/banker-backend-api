@@ -11,7 +11,7 @@ const {
 const router = express.Router();
 router.use(authenticate);
 
-const ALLOWED_STATUS = ['Active', 'Matured', 'Inactive'];
+const ALLOWED_STATUS = ['Active', 'Matured', 'Closed', 'Inactive'];
 
 function validate(body, partial = false) {
   const errors = [];
@@ -60,7 +60,7 @@ function publicSaving(doc) {
     durationYears: Math.round(years * 10000) / 10000,
     totalInterest,
     maturityValue: Math.round((amount + totalInterest) * 100) / 100,
-    status: item.status,
+    status: item.status === 'Inactive' ? 'Closed' : (item.status || 'Active'),
     createdAt: item.createdAt,
     updatedAt: item.updatedAt
   };
