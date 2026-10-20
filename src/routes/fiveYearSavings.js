@@ -33,7 +33,7 @@ function validate(body, partial = false) {
   const maturity = body.matureDate !== undefined ? parseDate(body.matureDate) : null;
   if (issue && maturity && maturity <= issue) errors.push('matureDate must be after issueDate.');
   if (body.status !== undefined && !ALLOWED_STATUS.includes(body.status)) {
-    errors.push('status must be Active, Matured, or Inactive.');
+    errors.push('status must be Active, Matured, or Closed.');
   }
   return errors;
 }
@@ -123,6 +123,17 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (errors.length) return res.status(400).json({ message: 'Invalid five-year savings data.', errors });
   const current = await FiveYearSaving.findOne({ _id: req.params.id, ownerId: req.user.id });
   if (!current) return res.status(404).json({ message: 'Five-year savings record not found.' });
+
+  // Matured/Closed records are read-only. The user may change the status to
+  // Active (and may edit details in the same request once reactivating).
+  const currentStatus = current.status === 'Inactive' ? 'Closed' : (current.status || 'Active');
+  const hasDetailChanges = ['savingsId', 'amount', 'interestRate', 'issueDate', 'matureDate']
+    .some((key) => body[key] !== undefined);
+  if (currentStatus !== 'Active' && hasDetailChanges && body.status !== 'Active') {
+    return res.status(409).json({
+      message: 'This savings record is read-only while Matured or Closed. Change its status to Active before editing other fields.'
+    });
+  }
 
   // Validate date ordering against unchanged values too.
   const issue = body.issueDate !== undefined ? parseDate(body.issueDate) : current.issueDate;
