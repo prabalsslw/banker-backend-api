@@ -10,11 +10,15 @@ router.use(authenticate);
 
 function validateSaving(body, partial = false) {
   const errors = [];
-  for (const key of ['savingsId', 'amount', 'interestRate', 'issueDate', 'matureDate', 'tenure', 'status']) if (!partial && body[key] === undefined) errors.push(`${key} is required.`);
+  const schemeType = body.schemeType || 'Sanchaypatra';
+  if (!['Sanchaypatra', 'Five-Year Bangladesh Sanchaypatra'].includes(schemeType)) errors.push('schemeType is not supported yet.');
+  for (const key of ['savingsId', 'amount', 'interestRate', 'issueDate', 'matureDate', 'status']) if (!partial && body[key] === undefined) errors.push(`${key} is required.`);
+  if (!partial && schemeType === 'Sanchaypatra' && body.tenure === undefined) errors.push('tenure is required for 3-monthly Sanchaypatra.');
   if (body.savingsId !== undefined && !isNonEmptyString(body.savingsId, 80)) errors.push('savingsId must be a non-empty string up to 80 characters.');
   if (body.amount !== undefined && (!Number.isFinite(Number(body.amount)) || Number(body.amount) < 0)) errors.push('amount must be a non-negative number.');
   if (body.interestRate !== undefined && (!Number.isFinite(Number(body.interestRate)) || Number(body.interestRate) < 0)) errors.push('interestRate must be a non-negative number.');
   if (body.tenure !== undefined && (!Number.isInteger(Number(body.tenure)) || Number(body.tenure) < 1)) errors.push('tenure must be a positive integer.');
+  if (body.schemeType !== undefined && !['Sanchaypatra', 'Five-Year Bangladesh Sanchaypatra'].includes(body.schemeType)) errors.push('schemeType is not supported yet.');
   for (const key of ['issueDate', 'matureDate']) if (body[key] !== undefined && !parseDate(body[key])) errors.push(`${key} must be a valid date.`);
   if (body.issueDate !== undefined && body.matureDate !== undefined && parseDate(body.matureDate) && parseDate(body.issueDate) && parseDate(body.matureDate) < parseDate(body.issueDate)) errors.push('matureDate must be on or after issueDate.');
   if (body.status !== undefined && !['Active', 'Matured', 'Inactive'].includes(body.status)) errors.push('status must be Active, Matured, or Inactive.');
@@ -29,7 +33,7 @@ function encryptedSavingFields(body) {
   }
   if (body.amount !== undefined) out.amountEncrypted = encryptNumber(body.amount);
   if (body.interestRate !== undefined) out.interestRateEncrypted = encryptNumber(body.interestRate);
-  for (const key of ['tenure', 'status']) if (body[key] !== undefined) out[key] = body[key];
+  for (const key of ['tenure', 'status', 'schemeType']) if (body[key] !== undefined) out[key] = body[key];
   for (const key of ['issueDate', 'matureDate']) if (body[key] !== undefined) out[key] = parseDate(body[key]);
   return out;
 }
@@ -43,7 +47,11 @@ function publicSaving(doc) {
     interestRate: decryptNumber(s.interestRateEncrypted),
     issueDate: s.issueDate,
     matureDate: s.matureDate,
-    tenure: s.tenure,
+    tenure: s.tenure || null,
+    schemeType: s.schemeType || 'Sanchaypatra',
+    totalInterest: (s.schemeType || 'Sanchaypatra') === 'Five-Year Bangladesh Sanchaypatra'
+      ? Math.round(decryptNumber(s.amountEncrypted) * decryptNumber(s.interestRateEncrypted) / 100 * 100) / 100
+      : null,
     status: s.status,
     createdAt: s.createdAt,
     updatedAt: s.updatedAt
@@ -75,6 +83,8 @@ function expectedPaymentDates(saving) {
 }
 
 async function ensurePaymentSchedule(saving, ownerId) {
+  // Five-year certificates do not have a generated payment schedule in this workflow.
+  if ((saving.schemeType || 'Sanchaypatra') !== 'Sanchaypatra') return;
   const existingCount = await Payment.countDocuments({ ownerId, savingId: saving._id });
   if (existingCount > 0) return;
   const dates = expectedPaymentDates(saving);
@@ -96,7 +106,11 @@ async function ensurePaymentSchedule(saving, ownerId) {
 }
 
 router.get('/', asyncHandler(async (req, res) => {
-  const docs = await Saving.find({ ownerId: req.user.id }).select('+savingsIdEncrypted +amountEncrypted +interestRateEncrypted').sort({ createdAt: -1 });
+  const schemeType = req.query.schemeType;
+  let filter = { ownerId: req.user.id };
+  if (schemeType === 'Sanchaypatra') filter = { ...filter, $or: [{ schemeType: 'Sanchaypatra' }, { schemeType: { $exists: false } }] };
+  else if (schemeType) filter.schemeType = schemeType;
+  const docs = await Saving.find(filter).select('+savingsIdEncrypted +amountEncrypted +interestRateEncrypted').sort({ createdAt: -1 });
   res.json({ count: docs.length, savings: docs.map(publicSaving) });
 }));
 router.get('/:id', asyncHandler(async (req, res) => {

@@ -8,7 +8,9 @@ const savingSchema = new mongoose.Schema({
   interestRateEncrypted: { type: String, required: true, select: false },
   issueDate: { type: Date, required: true },
   matureDate: { type: Date, required: true },
-  tenure: { type: Number, required: true, min: 1 },
+  // Additive field: old documents without schemeType are treated as quarterly Sanchaypatra.
+  schemeType: { type: String, enum: ['Sanchaypatra', 'Five-Year Bangladesh Sanchaypatra'], default: 'Sanchaypatra', index: true },
+  tenure: { type: Number, min: 1 },
   status: { type: String, enum: ['Active', 'Matured', 'Inactive'], default: 'Active' }
 }, { timestamps: true, versionKey: false });
 savingSchema.index({ ownerId: 1, savingsIdLookup: 1 }, { unique: true });
