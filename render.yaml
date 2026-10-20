@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: banker-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: PII_ENCRYPTION_KEY
+        sync: false
+      - key: PII_LOOKUP_HMAC_KEY
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 1h
+      - key: CORS_ORIGINS
+        sync: false

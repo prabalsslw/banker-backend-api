@@ -1,0 +1,23 @@
+require('dotenv').config();
+
+const connectDB = require('./config/db');
+const app = require('./app');
+
+const PORT = Number(process.env.PORT) || 3000;
+
+async function start() {
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+    throw new Error('JWT_SECRET must be configured and contain at least 32 characters.');
+  }
+
+  await connectDB();
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`bAnker API listening on port ${PORT}`);
+  });
+}
+
+start().catch((error) => {
+  console.error('Failed to start bAnker API:', error.message);
+  process.exit(1);
+});
