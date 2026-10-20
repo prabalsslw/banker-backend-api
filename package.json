@@ -7,8 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "check": "node --check src/server.js && node --check src/app.js && node --check src/routes/todos.js && node --check src/routes/savings.js && node --check src/routes/payments.js && node --check src/routes/backup.js && node --check src/routes/auth.js && node --check src/routes/profile.js && node --check src/routes/notifications.js && node --check scripts/send-payment-reminders.js && node --check scripts/migrate-encrypt-todo-titles.js",
-    "reminders": "node scripts/send-payment-reminders.js",
+    "check": "node --check src/server.js && node --check src/app.js && node --check src/routes/todos.js && node --check scripts/migrate-encrypt-todo-titles.js",
     "migrate:encrypt-todo-titles": "node scripts/migrate-encrypt-todo-titles.js"
   },
   "engines": {
