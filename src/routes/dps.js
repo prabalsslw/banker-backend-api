@@ -7,7 +7,7 @@ const authenticate = require('../middleware/authenticate');
 const asyncHandler = require('../utils/asyncHandler');
 const { isValidObjectId, isNonEmptyString, isValidPin } = require('../utils/validators');
 const { encryptPrivateField, decryptPrivateField, encryptNumber, decryptNumber, lookupHash } = require('../utils/privateFields');
-const { postWalletTransaction } = require('../utils/walletLedger');
+const { postWalletTransaction, getBalancePaisa } = require('../utils/walletLedger');
 const { notifyUser } = require('../utils/notifyUser');
 
 const router = express.Router();
@@ -117,6 +117,11 @@ router.get('/', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const body = req.body || {}; const errors = validatePayload(body); if (errors.length) return res.status(400).json({ message: 'Invalid DPS details.', errors });
   const months = tenureMonths(Number(body.tenure), body.tenureUnit); if (months > 600) return res.status(400).json({ message: 'DPS tenure cannot exceed 600 months.' });
+  const availablePaisa = await getBalancePaisa(req.user.id);
+  const firstInstallmentPaisa = moneyToPaisa(body.monthlyInstallment);
+  if (availablePaisa < firstInstallmentPaisa) {
+    return res.status(409).json({ message: `Insufficient available balance. DPS monthly installment is ৳${paisaToMoney(firstInstallmentPaisa).toFixed(2)}, but available balance is ৳${paisaToMoney(availablePaisa).toFixed(2)}. Deposit money before creating this DPS.` });
+  }
   const startDate = new Date(); const fields = encryptedFields(body);
   const doc = new DpsAccount({ ownerId: req.user.id, ...fields, startDate, maturityDate: addMonthsClamp(startDate, months), status: 'Active' });
   doc.payments = buildPayments(doc);

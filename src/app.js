@@ -51,6 +51,7 @@ app.use('/api/profile', require('./routes/profile'));
 app.use('/api/savings', require('./routes/savings'));
 app.use('/api/five-year-savings', require('./routes/fiveYearSavings'));
 app.use('/api/dps', require('./routes/dps'));
+app.use('/api/fdr', require('./routes/fdr'));
 app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/expenses', require('./routes/expenses'));
 app.use('/api/todos', require('./routes/todos'));
