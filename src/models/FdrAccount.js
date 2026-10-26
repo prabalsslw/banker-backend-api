@@ -13,6 +13,7 @@ const fdrPaymentSchema = new mongoose.Schema({
 const fdrAccountSchema = new mongoose.Schema({
   ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   bankEncrypted: { type: String, required: true, select: false },
+  accountNumberEncrypted: { type: String, default: null, select: false },
   fdrType: { type: String, enum: ['Monthly Interest Payout', 'Cumulative (Interest at Maturity)', 'Quarterly Interest Payout'], default: 'Cumulative (Interest at Maturity)', index: true },
   principalEncrypted: { type: String, required: true, select: false },
   rateEncrypted: { type: String, required: true, select: false },

@@ -40,13 +40,13 @@ function publicFdr(doc) {
     actualAmount: p.actualAmountPaisa == null ? null : Number(p.actualAmountPaisa) / 100,
     receivedDate: p.receivedDate ? asYmd(p.receivedDate) : null, status: p.status
   }));
-  return { id: String(x._id), bank: decryptPrivateField(x.bankEncrypted), fdrType, principal, rate, tenure,
+  return { id: String(x._id), bank: decryptPrivateField(x.bankEncrypted), accountNumber: x.accountNumberEncrypted ? decryptPrivateField(x.accountNumberEncrypted) : '', fdrType, principal, rate, tenure,
     start: asYmd(start), maturityDate: asYmd(maturity), status: x.status, maturityValue, interest,
     totalInterest: fdrType === 'Monthly Interest Payout' ? interestPerPayout * tenure : totalInterest,
     interestPerPayout, payoutFrequency: fdrType === 'Monthly Interest Payout' ? 'Monthly' : fdrType === 'Quarterly Interest Payout' ? 'Quarterly' : 'At maturity', payments };
 }
 router.get('/', asyncHandler(async (req, res) => {
-  const docs = await FdrAccount.find({ ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted').sort({ createdAt: -1 });
+  const docs = await FdrAccount.find({ ownerId: req.user.id }).select('+bankEncrypted +accountNumberEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted').sort({ createdAt: -1 });
   // Backfill monthly schedules for existing monthly FDRs created before payment tracking was introduced.
   for (const doc of docs) {
     if (doc.fdrType === 'Monthly Interest Payout' && (!doc.payments || doc.payments.length === 0)) {
@@ -59,11 +59,12 @@ router.get('/', asyncHandler(async (req, res) => {
   const fdr = docs.map(publicFdr); res.json({ count: fdr.length, fdr });
 }));
 router.post('/', asyncHandler(async (req, res) => {
-  const { bank, principal, rate, tenure } = req.body || {};
+  const { bank, accountNumber, principal, rate, tenure } = req.body || {};
   const allowedFdrTypes = ['Monthly Interest Payout', 'Cumulative (Interest at Maturity)', 'Quarterly Interest Payout'];
   const fdrType = req.body?.fdrType || 'Cumulative (Interest at Maturity)';
   if (!allowedFdrTypes.includes(fdrType)) return res.status(400).json({ message: 'Select a valid FDR type.' });
   if (!isNonEmptyString(bank, 120)) return res.status(400).json({ message: 'Bank / institution is required.' });
+  if (!isNonEmptyString(accountNumber, 80)) return res.status(400).json({ message: 'FDR account number is required.' });
   let principalPaisa; try { principalPaisa = moneyToPaisa(principal); } catch (e) { return res.status(400).json({ message: e.message }); }
   if (!Number.isFinite(Number(rate)) || Number(rate) < 0 || Number(rate) > 100) return res.status(400).json({ message: 'Interest rate must be between 0 and 100.' });
   if (!Number.isInteger(Number(tenure)) || Number(tenure) < 1 || Number(tenure) > 600) return res.status(400).json({ message: 'Tenure must be between 1 and 600 months.' });
@@ -72,7 +73,7 @@ router.post('/', asyncHandler(async (req, res) => {
   const payments = fdrType === 'Monthly Interest Payout' ? Array.from({ length: Number(tenure) }, (_, i) => ({
     monthNumber: i + 1, dueDate: addMonthsClamp(startDate, i + 1), expectedAmountPaisa: monthlyPaisa, status: 'Pending'
   })) : [];
-  const fdr = await FdrAccount.create({ ownerId: req.user.id, fdrType, bankEncrypted: encryptPrivateField(bank.trim()), principalEncrypted: encryptNumber(principalPaisa / 100), rateEncrypted: encryptNumber(Number(rate)), tenureEncrypted: encryptNumber(Number(tenure)), startDate, maturityDate, payments });
+  const fdr = await FdrAccount.create({ ownerId: req.user.id, fdrType, bankEncrypted: encryptPrivateField(bank.trim()), accountNumberEncrypted: encryptPrivateField(accountNumber.trim()), principalEncrypted: encryptNumber(principalPaisa / 100), rateEncrypted: encryptNumber(Number(rate)), tenureEncrypted: encryptNumber(Number(tenure)), startDate, maturityDate, payments });
   try { await postWalletTransaction({ ownerId: req.user.id, amountPaisa: -principalPaisa, type: 'fdr_debit', description: `FDR principal: ${bank.trim()}`, referenceKey: `fdr:${fdr._id}:purchase` }); }
   catch (e) { await FdrAccount.deleteOne({ _id: fdr._id, ownerId: req.user.id }); if (e.status === 409) return res.status(409).json({ message: e.message }); throw e; }
   await notifyUser(req.user.id, { type: 'success', title: 'FDR created', message: `${bank.trim()} (${fdrType}) FDR opened; ৳${(principalPaisa/100).toFixed(2)} was deducted from available balance.`, relatedId: String(fdr._id) });
@@ -80,7 +81,7 @@ router.post('/', asyncHandler(async (req, res) => {
 }));
 router.patch('/:id/payments/:paymentId', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id) || !isValidObjectId(req.params.paymentId)) return res.status(400).json({ message: 'Invalid FDR or payment ID.' });
-  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
+  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +accountNumberEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
   if (!doc) return res.status(404).json({ message: 'FDR not found.' });
   if (doc.fdrType !== 'Monthly Interest Payout') return res.status(400).json({ message: 'Monthly payments are only available for monthly interest payout FDRs.' });
   if (doc.status !== 'Active') return res.status(409).json({ message: 'Payments cannot be changed after FDR maturity or closure.' });
@@ -128,14 +129,10 @@ router.post('/:id/mature', asyncHandler(async (req, res) => {
   if (!isValidPin(pin)) return res.status(400).json({ message: 'A valid 4-digit PIN is required.' });
   const user = await User.findById(req.user.id).select('+pinHash');
   if (!user || !(await bcrypt.compare(pin, user.pinHash))) return res.status(401).json({ message: 'Incorrect PIN.' });
-  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
+  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +accountNumberEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
   if (!doc) return res.status(404).json({ message: 'FDR not found.' });
   if (doc.status !== 'Active') return res.status(409).json({ message: 'Only active FDR accounts can mature.' });
-  // The UI displays maturity as a calendar date, so permit maturity for the
-  // entire displayed date instead of waiting until the original timestamp.
-  const maturityDay = asYmd(doc.maturityDate);
-  const todayDay = asYmd(new Date());
-  if (maturityDay > todayDay) return res.status(409).json({ message: `This FDR has not reached maturity date ${maturityDay} yet.` });
+  if (new Date(doc.maturityDate) > new Date()) return res.status(409).json({ message: `This FDR has not reached maturity date ${asYmd(doc.maturityDate)} yet.` });
   const principal = decryptNumber(doc.principalEncrypted);
   const rate = decryptNumber(doc.rateEncrypted);
   const tenure = decryptNumber(doc.tenureEncrypted);
@@ -156,10 +153,10 @@ router.post('/:id/close', asyncHandler(async (req, res) => {
   if (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) / 100 !== amount) return res.status(400).json({ message: 'Encashment amount must be positive with at most two decimal places.' });
   const user = await User.findById(req.user.id).select('+pinHash');
   if (!user || !(await bcrypt.compare(pin, user.pinHash))) return res.status(401).json({ message: 'Incorrect PIN.' });
-  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
+  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +accountNumberEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
   if (!doc) return res.status(404).json({ message: 'FDR not found.' });
   if (doc.status !== 'Active') return res.status(409).json({ message: 'Only active FDR accounts can be encashed.' });
-  if (asYmd(doc.maturityDate) <= asYmd(new Date())) return res.status(409).json({ message: 'This FDR has reached maturity. Use Mature instead of early encashment.' });
+  if (new Date(doc.maturityDate) <= new Date()) return res.status(409).json({ message: 'This FDR has reached maturity. Use Mature instead of early encashment.' });
   const principal = decryptNumber(doc.principalEncrypted);
   if (amount > principal) return res.status(400).json({ message: 'Encashment amount cannot exceed the principal amount.' });
   const creditPaisa = Math.round(amount * 100);
@@ -170,14 +167,15 @@ router.post('/:id/close', asyncHandler(async (req, res) => {
 }));
 router.patch('/:id', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid FDR ID.' });
-  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
+  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +accountNumberEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
   if (!doc) return res.status(404).json({ message: 'FDR not found.' });
   if (doc.status !== 'Active') return res.status(409).json({ message: 'Only active FDR accounts can be edited.' });
   if ((doc.payments || []).some(p => p.status === 'Received')) return res.status(409).json({ message: 'FDR cannot be edited after a monthly payment has been received.' });
-  const { bank, rate } = req.body || {};
+  const { bank, accountNumber, rate } = req.body || {};
   if (!isNonEmptyString(bank, 120)) return res.status(400).json({ message: 'Bank / institution is required.' });
+  if (!isNonEmptyString(accountNumber, 80)) return res.status(400).json({ message: 'FDR account number is required.' });
   if (!Number.isFinite(Number(rate)) || Number(rate) < 0 || Number(rate) > 100) return res.status(400).json({ message: 'Interest rate must be between 0 and 100.' });
-  doc.bankEncrypted = encryptPrivateField(bank.trim()); doc.rateEncrypted = encryptNumber(Number(rate));
+  doc.bankEncrypted = encryptPrivateField(bank.trim()); doc.accountNumberEncrypted = encryptPrivateField(accountNumber.trim()); doc.rateEncrypted = encryptNumber(Number(rate));
   if (doc.fdrType === 'Monthly Interest Payout') {
     const principal = decryptNumber(doc.principalEncrypted); const tenure = decryptNumber(doc.tenureEncrypted);
     const monthlyPaisa = Math.round(principal * Number(rate) / 1200 * 100);
@@ -187,7 +185,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 }));
 router.delete('/:id', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid FDR ID.' });
-  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
+  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +accountNumberEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
   if (!doc) return res.status(404).json({ message: 'FDR not found.' });
   if (doc.status !== 'Active') return res.status(409).json({ message: 'Only active FDR can be deleted.' });
   const item = publicFdr(doc); await postWalletTransaction({ ownerId: req.user.id, amountPaisa: Math.round(item.principal * 100), type: 'adjustment', description: `FDR principal returned: ${item.bank}`, referenceKey: `fdr:${doc._id}:refund`, allowNegative: true });
