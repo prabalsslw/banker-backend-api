@@ -1,5 +1,8 @@
 const express = require('express');
 const Payment = require('../models/Payment');
+const { notifyUser } = require('../utils/notifyUser');
+const { postWalletTransaction } = require('../utils/walletLedger');
+const crypto = require('crypto');
 const Saving = require('../models/Saving');
 const authenticate = require('../middleware/authenticate');
 const asyncHandler = require('../utils/asyncHandler');
@@ -54,9 +57,8 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!Number.isInteger(Number(b.paymentNumber)) || Number(b.paymentNumber) < 1) return res.status(400).json({ message: 'paymentNumber must be a positive integer.' });
   if (!Number.isFinite(Number(b.amount)) || Number(b.amount) < 0) return res.status(400).json({ message: 'amount must be a non-negative number.' });
   const interestAmount = b.interestAmount === undefined ? 0 : Number(b.interestAmount);
-  const creditedInterestAmount = b.creditedInterestAmount === undefined ? 0 : Number(b.creditedInterestAmount);
-  if (!Number.isFinite(creditedInterestAmount) || creditedInterestAmount < 0) return res.status(400).json({ message: 'creditedInterestAmount must be non-negative.' });
   if (!Number.isFinite(interestAmount) || interestAmount < 0) return res.status(400).json({ message: 'interestAmount must be non-negative.' });
+  if (b.creditedInterestAmount !== undefined && (!Number.isFinite(Number(b.creditedInterestAmount)) || Number(b.creditedInterestAmount) < 0)) return res.status(400).json({ message: 'creditedInterestAmount must be non-negative.' });
   if (!parseDate(b.paymentDate)) return res.status(400).json({ message: 'paymentDate must be a valid date.' });
   if (b.paymentReceivedDate !== undefined && b.paymentReceivedDate !== null && !parseDate(b.paymentReceivedDate)) return res.status(400).json({ message: 'paymentReceivedDate must be a valid date or null.' });
   if (b.isPaid !== undefined && typeof b.isPaid !== 'boolean') return res.status(400).json({ message: 'isPaid must be true or false.' });
@@ -68,12 +70,13 @@ router.post('/', asyncHandler(async (req, res) => {
     ownerId: req.user.id, savingId: saving._id,
     paymentNumber: Number(b.paymentNumber), amountEncrypted: encryptNumber(b.amount),
     interestAmountEncrypted: encryptNumber(interestAmount),
-    creditedInterestAmountEncrypted: encryptNumber(creditedInterestAmount),
+    creditedInterestAmountEncrypted: encryptNumber(b.creditedInterestAmount === undefined ? 0 : Number(b.creditedInterestAmount)),
     tenure: b.tenure === undefined ? undefined : Number(b.tenure),
     paymentDate: parseDate(b.paymentDate),
     paymentReceivedDate: b.paymentReceivedDate ? parseDate(b.paymentReceivedDate) : null,
     isPaid: b.isPaid === true
   });
+  await notifyUser(req.user.id, { type: 'info', title: 'Sanchayapatra payment scheduled', message: `Payment #${payment.paymentNumber} was added to the schedule for ${parseDate(b.paymentDate).toISOString().slice(0, 10)}.`, relatedId: String(saving._id) });
   res.status(201).json({ message: 'Payment created.', payment: publicPayment(payment) });
 }));
 
@@ -88,10 +91,27 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (b.paymentDate !== undefined && !parseDate(b.paymentDate)) return res.status(400).json({ message: 'paymentDate must be a valid date.' });
   if (b.paymentReceivedDate !== undefined && b.paymentReceivedDate !== null && !parseDate(b.paymentReceivedDate)) return res.status(400).json({ message: 'paymentReceivedDate must be a valid date or null.' });
   if (b.isPaid !== undefined && typeof b.isPaid !== 'boolean') return res.status(400).json({ message: 'isPaid must be true or false.' });
+  const current = await Payment.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+amountEncrypted +interestAmountEncrypted +creditedInterestAmountEncrypted');
+  if (!current) return res.status(404).json({ message: 'Payment not found.' });
   const updates = encryptedUpdates(b);
   if (!Object.keys(updates).length) return res.status(400).json({ message: 'No fields supplied.' });
-  const payment = await Payment.findOneAndUpdate({ _id: req.params.id, ownerId: req.user.id }, { $set: updates }, { new: true, runValidators: true }).select('+amountEncrypted +interestAmountEncrypted +creditedInterestAmountEncrypted');
-  if (!payment) return res.status(404).json({ message: 'Payment not found.' });
+  const wasPaid = current.isPaid;
+  const oldCredited = wasPaid ? Number(current.creditedInterestAmountEncrypted ? decryptNumber(current.creditedInterestAmountEncrypted) : 0) : 0;
+  if (b.isPaid === true && b.creditedInterestAmount === undefined && !wasPaid) {
+    updates.creditedInterestAmountEncrypted = current.interestAmountEncrypted;
+  }
+  Object.assign(current, updates);
+  const willBePaid = current.isPaid;
+  const newCredited = willBePaid ? Number(current.creditedInterestAmountEncrypted ? decryptNumber(current.creditedInterestAmountEncrypted) : 0) : 0;
+  const deltaPaisa = Math.round((newCredited - oldCredited) * 100);
+  if (deltaPaisa !== 0) await postWalletTransaction({
+    ownerId: req.user.id, amountPaisa: deltaPaisa, type: 'adjustment',
+    description: `${deltaPaisa > 0 ? 'Sanchayapatra profit received' : 'Sanchayapatra profit reversal'} payment #${current.paymentNumber}`,
+    referenceKey: `saving-payment:${current._id}:interest:${crypto.randomUUID()}`, allowNegative: true
+  });
+  await current.save();
+  const payment = await Payment.findById(current._id).select('+amountEncrypted +interestAmountEncrypted +creditedInterestAmountEncrypted');
+  await notifyUser(req.user.id, { type: 'payment', title: payment.isPaid ? 'Sanchayapatra payment received' : 'Sanchayapatra payment updated', message: `Payment #${payment.paymentNumber} was ${payment.isPaid ? `marked received with ৳${newCredited.toFixed(2)} credited to your available balance` : 'updated/returned to pending'}.`, relatedId: String(payment.savingId) });
   res.json({ message: 'Payment updated.', payment: publicPayment(payment) });
 }));
 
@@ -99,6 +119,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid payment ID.' });
   const payment = await Payment.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id });
   if (!payment) return res.status(404).json({ message: 'Payment not found.' });
+  await notifyUser(req.user.id, { type: 'warning', title: 'Sanchayapatra payment deleted', message: `Payment #${payment.paymentNumber} was removed from the schedule.`, relatedId: String(payment.savingId) });
   res.json({ message: 'Payment deleted.' });
 }));
 module.exports = router;

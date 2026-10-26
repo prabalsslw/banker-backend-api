@@ -1,6 +1,11 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
 const Saving = require('../models/Saving');
 const Payment = require('../models/Payment');
+const User = require('../models/User');
+const { postWalletTransaction } = require('../utils/walletLedger');
+const { notifyUser } = require('../utils/notifyUser');
+const { isValidPin } = require('../utils/validators');
 const authenticate = require('../middleware/authenticate');
 const asyncHandler = require('../utils/asyncHandler');
 const { isValidObjectId, isNonEmptyString, parseDate } = require('../utils/validators');
@@ -124,7 +129,17 @@ router.post('/', asyncHandler(async (req, res) => {
   const errors = validateSaving(body);
   if (errors.length) return res.status(400).json({ message: 'Invalid saving data.', errors });
   const saving = await Saving.create({ ...encryptedSavingFields(body), ownerId: req.user.id });
-  await ensurePaymentSchedule(saving, req.user.id);
+  try {
+    const principalPaisa = Math.round(Number(body.amount) * 100);
+    await postWalletTransaction({ ownerId: req.user.id, amountPaisa: -principalPaisa, type: 'savings_debit', description: `Purchase 3-month Sanchayapatra ${String(body.savingsId).trim()}`, referenceKey: `savings:${saving._id}:purchase` });
+    await ensurePaymentSchedule(saving, req.user.id);
+  } catch (error) {
+    await Payment.deleteMany({ ownerId: req.user.id, savingId: saving._id });
+    await Saving.deleteOne({ _id: saving._id, ownerId: req.user.id });
+    if (error.status === 409) return res.status(409).json({ message: error.message });
+    throw error;
+  }
+  await notifyUser(req.user.id, { type: 'success', title: 'Sanchayapatra created', message: `${String(body.savingsId).trim()} was created and ৳${Number(body.amount).toFixed(2)} was deducted from your available balance.`, relatedId: String(saving._id) });
   res.status(201).json({ message: 'Saving created.', saving: publicSaving(saving) });
 }));
 
@@ -170,22 +185,53 @@ router.get('/:id/details', asyncHandler(async (req, res) => {
   });
 }));
 
+router.post('/:id/mature', asyncHandler(async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid saving ID.' });
+  const { pin } = req.body || {};
+  if (!isValidPin(pin)) return res.status(400).json({ message: 'A valid 4-digit PIN is required.' });
+  const user = await User.findById(req.user.id).select('+pinHash');
+  if (!user || !(await bcrypt.compare(pin, user.pinHash))) return res.status(401).json({ message: 'Incorrect PIN.' });
+  const saving = await Saving.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted +amountEncrypted +interestRateEncrypted');
+  if (!saving) return res.status(404).json({ message: 'Saving not found.' });
+  if (saving.status === 'Matured') return res.status(409).json({ message: 'This Sanchayapatra has already matured.' });
+  if (saving.status !== 'Active') return res.status(409).json({ message: 'Only Active Sanchayapatra can be matured.' });
+  if (new Date(saving.matureDate) > new Date()) return res.status(409).json({ message: 'This Sanchayapatra has not reached its maturity date yet.' });
+  const principalPaisa = Math.round(decryptNumber(saving.amountEncrypted) * 100);
+  await postWalletTransaction({ ownerId: req.user.id, amountPaisa: principalPaisa, type: 'savings_maturity', description: `3-month Sanchayapatra maturity: ${decryptPrivateField(saving.savingsIdEncrypted)}`, referenceKey: `savings:${saving._id}:maturity`, allowNegative: true });
+  saving.status = 'Matured'; await saving.save();
+  await notifyUser(req.user.id, { type: 'success', title: 'Sanchayapatra matured', message: `${decryptPrivateField(saving.savingsIdEncrypted)} matured; principal ৳${(principalPaisa / 100).toFixed(2)} was credited to your available balance.`, relatedId: String(saving._id) });
+  res.json({ message: 'Sanchayapatra matured and principal credited.', saving: publicSaving(saving) });
+}));
+
 router.patch('/:id', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid saving ID.' });
   const body = req.body || {};
   const errors = validateSaving(body, true);
   if (errors.length) return res.status(400).json({ message: 'Invalid saving data.', errors });
+  const current = await Saving.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted +amountEncrypted +interestRateEncrypted');
+  if (!current) return res.status(404).json({ message: 'Saving not found.' });
+  if (current.status === 'Matured' && Object.keys(body).some((key) => key !== 'status')) return res.status(409).json({ message: 'Matured savings cannot be edited.' });
+  if (body.status === 'Matured') return res.status(400).json({ message: 'Use POST /api/savings/:id/mature with your PIN to credit maturity proceeds.' });
   const updates = encryptedSavingFields(body);
   if (!Object.keys(updates).length) return res.status(400).json({ message: 'No valid fields supplied.' });
+  if (body.amount !== undefined && current.status === 'Active') {
+    const oldAmount = decryptNumber(current.amountEncrypted);
+    const deltaPaisa = Math.round((Number(body.amount) - oldAmount) * 100);
+    if (deltaPaisa !== 0) await postWalletTransaction({ ownerId: req.user.id, amountPaisa: -deltaPaisa, type: deltaPaisa > 0 ? 'savings_debit' : 'adjustment', description: `Adjust Sanchayapatra principal ${String(decryptPrivateField(current.savingsIdEncrypted))}`, referenceKey: `savings:${current._id}:principal-adjust:${require('crypto').randomUUID()}` });
+  }
   const saving = await Saving.findOneAndUpdate({ _id: req.params.id, ownerId: req.user.id }, { $set: updates }, { new: true, runValidators: true }).select('+savingsIdEncrypted +amountEncrypted +interestRateEncrypted');
-  if (!saving) return res.status(404).json({ message: 'Saving not found.' });
+  if (body.interestRate !== undefined && (saving.schemeType || 'Sanchaypatra') === 'Sanchaypatra') {
+    await Payment.updateMany({ ownerId: req.user.id, savingId: saving._id }, { $set: { interestAmountEncrypted: encryptNumber(Number(body.interestRate)) } });
+  }
+  await notifyUser(req.user.id, { type: 'info', title: 'Sanchayapatra updated', message: `${decryptPrivateField(saving.savingsIdEncrypted)} details were updated.`, relatedId: String(saving._id) });
   res.json({ message: 'Saving updated.', saving: publicSaving(saving) });
 }));
 router.delete('/:id', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid saving ID.' });
-  const saving = await Saving.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id });
+  const saving = await Saving.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted');
   if (!saving) return res.status(404).json({ message: 'Saving not found.' });
   await Payment.deleteMany({ savingId: saving._id, ownerId: req.user.id });
+  await notifyUser(req.user.id, { type: 'warning', title: 'Sanchayapatra deleted', message: `${decryptPrivateField(saving.savingsIdEncrypted)} and its payment schedule were deleted.`, relatedId: String(saving._id) });
   res.json({ message: 'Saving and its payment schedule deleted.' });
 }));
 module.exports = router;

@@ -7,6 +7,7 @@ const userSchema = new mongoose.Schema({
   emailLookup: { type: String, required: true, unique: true, index: true, select: false },
   pinHash: { type: String, required: true, select: false },
   biometricEnabled: { type: Boolean, default: false },
+  notificationsEnabled: { type: Boolean, default: true },
   isActive: { type: Boolean, default: true }
 }, { timestamps: true, versionKey: false });
 module.exports = mongoose.model('User', userSchema);

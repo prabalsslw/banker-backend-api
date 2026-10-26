@@ -11,13 +11,18 @@ const dpsPaymentSchema = new mongoose.Schema({
 
 const dpsAccountSchema = new mongoose.Schema({
   ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  schemeName: { type: String, required: true, trim: true, maxlength: 120 },
+  // New encrypted fields. Legacy plaintext fields below are retained only for backward-compatible migration.
+  schemeNameEncrypted: { type: String, select: false },
   accountNumberEncrypted: { type: String, required: true, select: false },
   accountNumberLookup: { type: String, required: true, select: false },
-  monthlyInstallmentPaisa: { type: Number, required: true, min: 1 },
-  tenure: { type: Number, required: true, min: 1, max: 600 },
+  monthlyInstallmentEncrypted: { type: String, select: false },
+  tenureEncrypted: { type: String, select: false },
+  interestRateEncrypted: { type: String, select: false },
+  schemeName: { type: String, trim: true, maxlength: 120, select: false },
+  monthlyInstallmentPaisa: { type: Number, min: 1, select: false },
+  tenure: { type: Number, min: 1, max: 600, select: false },
   tenureUnit: { type: String, enum: ['months', 'years'], required: true },
-  interestRate: { type: Number, required: true, min: 0, max: 100 },
+  interestRate: { type: Number, min: 0, max: 100, select: false },
   startDate: { type: Date, required: true },
   maturityDate: { type: Date, required: true },
   status: { type: String, enum: ['Active', 'Matured'], default: 'Active', index: true },
@@ -28,4 +33,5 @@ const dpsAccountSchema = new mongoose.Schema({
 
 dpsAccountSchema.index({ ownerId: 1, accountNumberLookup: 1 }, { unique: true });
 dpsAccountSchema.index({ ownerId: 1, status: 1, maturityDate: 1 });
+dpsAccountSchema.index({ ownerId: 1, createdAt: -1 });
 module.exports = mongoose.model('DpsAccount', dpsAccountSchema);

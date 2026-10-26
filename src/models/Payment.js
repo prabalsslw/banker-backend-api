@@ -5,10 +5,8 @@ const paymentSchema = new mongoose.Schema({
   savingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Saving', required: true, index: true },
   paymentNumber: { type: Number, required: true, min: 1 },
   amountEncrypted: { type: String, required: true, select: false },
-  // Expected interest for this scheduled payment.
   interestAmountEncrypted: { type: String, required: true, select: false },
-  // Actual interest credited by the bank; separate from expected interest.
-  creditedInterestAmountEncrypted: { type: String, required: false, select: false },
+  creditedInterestAmountEncrypted: { type: String, default: null, select: false },
   tenure: { type: Number, min: 1 },
   paymentDate: { type: Date, required: true },
   paymentReceivedDate: { type: Date, default: null },

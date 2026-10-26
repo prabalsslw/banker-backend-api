@@ -1,5 +1,6 @@
 const express = require('express');
 const Notification = require('../models/Notification');
+const User = require('../models/User');
 const authenticate = require('../middleware/authenticate');
 const asyncHandler = require('../utils/asyncHandler');
 const { isValidObjectId, isNonEmptyString } = require('../utils/validators');
@@ -25,6 +26,8 @@ router.post('/', asyncHandler(async (req, res) => {
   if (type !== undefined && !validTypes.includes(type)) return res.status(400).json({ message: 'Invalid notification type.' });
   if (relatedId !== undefined && relatedId !== null && (typeof relatedId !== 'string' || relatedId.length > 100)) return res.status(400).json({ message: 'relatedId must be a string up to 100 characters.' });
 
+  const preference = await User.findById(req.user.id).select('notificationsEnabled').lean();
+  if (preference && preference.notificationsEnabled === false) return res.json({ message: 'Notifications are disabled; no notification was stored.' });
   const notification = await Notification.create({
     ownerId: req.user.id,
     type: type || 'info',

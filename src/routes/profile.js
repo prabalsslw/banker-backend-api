@@ -7,7 +7,7 @@ const { isValidPin, isNonEmptyString } = require('../utils/validators');
 const { normalizeEmail, encryptPrivateField, decryptPrivateField, lookupHash } = require('../utils/privateFields');
 const router = express.Router();
 router.use(authenticate);
-function publicUser(user) { return { id: user._id.toString(), name: user.name, phone: decryptPrivateField(user.phoneEncrypted), email: decryptPrivateField(user.emailEncrypted), biometricEnabled: user.biometricEnabled, createdAt: user.createdAt }; }
+function publicUser(user) { return { id: user._id.toString(), name: user.name, phone: decryptPrivateField(user.phoneEncrypted), email: decryptPrivateField(user.emailEncrypted), biometricEnabled: user.biometricEnabled, notificationsEnabled: user.notificationsEnabled !== false, createdAt: user.createdAt }; }
 
 router.get('/', asyncHandler(async (req, res) => {
   const user = await User.findById(req.user.id).select('+phoneEncrypted +emailEncrypted');
@@ -45,6 +45,13 @@ router.patch('/pin', asyncHandler(async (req, res) => {
   user.pinHash = await bcrypt.hash(newPin, 12);
   await user.save();
   res.json({ message: 'PIN changed successfully. Log in again if requested.' });
+}));
+
+router.patch('/notifications', asyncHandler(async (req, res) => {
+  const { enabled } = req.body || {};
+  if (typeof enabled !== 'boolean') return res.status(400).json({ message: 'enabled must be true or false.' });
+  const user = await User.findByIdAndUpdate(req.user.id, { $set: { notificationsEnabled: enabled } }, { new: true });
+  res.json({ notificationsEnabled: user.notificationsEnabled !== false });
 }));
 
 router.patch('/biometric', asyncHandler(async (req, res) => {
