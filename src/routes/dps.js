@@ -81,7 +81,7 @@ function validatePayload(body, partial = false) {
   if (body.tenure !== undefined && (!Number.isInteger(Number(body.tenure)) || Number(body.tenure) < 1 || Number(body.tenure) > 600)) errors.push('tenure must be an integer from 1 to 600.');
   if (body.tenureUnit !== undefined && !['months', 'years'].includes(body.tenureUnit)) errors.push('tenureUnit must be months or years.');
   if (body.interestRate !== undefined && (!Number.isFinite(Number(body.interestRate)) || Number(body.interestRate) < 0 || Number(body.interestRate) > 100)) errors.push('interestRate must be from 0 to 100.');
-  if (body.status !== undefined && !['Active', 'Matured'].includes(body.status)) errors.push('status must be Active or Matured.');
+  if (body.status !== undefined && !['Active', 'Matured', 'Closed'].includes(body.status)) errors.push('status must be Active, Matured, or Closed.');
   return errors;
 }
 async function verifyPin(ownerId, pin) {
@@ -139,8 +139,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const body = req.body || {}; const errors = validatePayload(body, true); if (errors.length) return res.status(400).json({ message: 'Invalid DPS details.', errors });
   const doc = await DpsAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select(selectSensitive);
   if (!doc) return res.status(404).json({ message: 'DPS not found.' });
-  if (doc.encashedAt || doc.status === 'Matured') return res.status(409).json({ message: 'A matured/encashed DPS cannot be edited.' });
+  if (doc.encashedAt || doc.status === 'Matured' || doc.status === 'Closed') return res.status(409).json({ message: 'A matured/closed DPS cannot be edited.' });
   const { pin, status, ...updates } = body; const shouldEncash = status === 'Matured';
+  if (status === 'Closed') return res.status(400).json({ message: 'Use POST /api/dps/:id/close with PIN and earlyEncashAmount to close a DPS early.' } );
+  if (shouldEncash && new Date(doc.maturityDate) > new Date()) return res.status(409).json({ message: 'This DPS has not reached its maturity date. Use Close for early encashment.' });
   if (shouldEncash && !(await verifyPin(req.user.id, pin))) return res.status(401).json({ message: 'Correct 4-digit PIN is required to mature and encash this DPS.' });
   const oldPayments = doc.payments || []; const fields = encryptedFields(updates); Object.assign(doc, fields);
   const a = values(doc); const months = tenureMonths(a.tenure, a.tenureUnit); if (months > 600) return res.status(400).json({ message: 'DPS tenure cannot exceed 600 months.' });
@@ -154,10 +156,30 @@ router.post('/:id/encash', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid DPS ID.' });
   const doc = await DpsAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select(selectSensitive);
   if (!doc) return res.status(404).json({ message: 'DPS not found.' });
-  if (doc.encashedAt) return res.status(409).json({ message: 'This DPS has already been encashed.' });
+  if (doc.encashedAt || doc.status === 'Closed' || doc.status === 'Matured') return res.status(409).json({ message: 'This DPS has already been matured or closed.' });
+  if (new Date(doc.maturityDate) > new Date()) return res.status(409).json({ message: 'This DPS has not reached its maturity date. Use Close for early encashment.' });
   if (!(await verifyPin(req.user.id, req.body?.pin))) return res.status(401).json({ message: 'Correct 4-digit PIN is required to encash this DPS.' });
   await encash(doc); const refreshed = await DpsAccount.findById(doc._id).select(selectSensitive); res.json({ message: 'DPS encashed and proceeds credited to wallet.', dps: publicDps(refreshed) });
 }));
+router.post('/:id/close', asyncHandler(async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid DPS ID.' });
+  const doc = await DpsAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select(selectSensitive);
+  if (!doc) return res.status(404).json({ message: 'DPS not found.' });
+  if (doc.encashedAt || doc.status !== 'Active') return res.status(409).json({ message: 'Only active DPS can be closed early.' });
+  if (new Date(doc.maturityDate) <= new Date()) return res.status(409).json({ message: 'This DPS has reached its maturity date. Use Encash DPS instead.' });
+  const { pin, earlyEncashAmount } = req.body || {};
+  if (!(await verifyPin(req.user.id, pin))) return res.status(401).json({ message: 'Correct 4-digit PIN is required to close this DPS.' });
+  let creditPaisa; try { creditPaisa = moneyToPaisa(earlyEncashAmount); } catch (e) { return res.status(400).json({ message: e.message }); }
+  if (creditPaisa < 1) return res.status(400).json({ message: 'Early encashment amount must be greater than zero.' });
+  const totals = calc(doc);
+  if (creditPaisa > totals.maturityPaisa) return res.status(400).json({ message: 'Early encashment amount cannot exceed the DPS maturity amount.' });
+  const a = values(doc);
+  await postWalletTransaction({ ownerId: req.user.id, amountPaisa: creditPaisa, type: 'dps_early_close', description: `Early closure of DPS: ${a.schemeName}`, referenceKey: `dps:${doc._id}:early-close` });
+  doc.status = 'Closed'; doc.encashedAt = new Date(); doc.encashmentAmountPaisa = creditPaisa; await doc.save();
+  await notifyUser(req.user.id, { type: 'warning', title: 'DPS closed early', message: `${a.schemeName} was closed early. ৳${paisaToMoney(creditPaisa).toFixed(2)} was credited to available balance.`, relatedId: String(doc._id) });
+  res.json({ message: 'DPS closed and early encashment credited.', dps: publicDps(doc) });
+}));
+
 router.patch('/:id/payments/:paymentId', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id) || !isValidObjectId(req.params.paymentId)) return res.status(400).json({ message: 'Invalid DPS or installment ID.' });
   const doc = await DpsAccount.findOne({ _id: req.params.id, ownerId: req.user.id });

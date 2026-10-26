@@ -25,7 +25,7 @@ const dpsAccountSchema = new mongoose.Schema({
   interestRate: { type: Number, min: 0, max: 100, select: false },
   startDate: { type: Date, required: true },
   maturityDate: { type: Date, required: true },
-  status: { type: String, enum: ['Active', 'Matured'], default: 'Active', index: true },
+  status: { type: String, enum: ['Active', 'Matured', 'Closed'], default: 'Active', index: true },
   payments: { type: [dpsPaymentSchema], default: [] },
   encashedAt: { type: Date, default: null },
   encashmentAmountPaisa: { type: Number, default: null }

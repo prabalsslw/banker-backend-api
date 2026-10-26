@@ -121,6 +121,26 @@ router.post('/', asyncHandler(async (req, res) => {
   }
 }));
 
+router.post('/:id/close', asyncHandler(async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid five-year savings record ID.' });
+  const { pin, earlyEncashAmount } = req.body || {};
+  if (!isValidPin(pin)) return res.status(400).json({ message: 'A valid 4-digit PIN is required.' });
+  const amount = Number(earlyEncashAmount);
+  if (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) / 100 !== amount) return res.status(400).json({ message: 'Early encashment amount must be positive with at most two decimal places.' });
+  const user = await User.findById(req.user.id).select('+pinHash');
+  if (!user || !(await bcrypt.compare(pin, user.pinHash))) return res.status(401).json({ message: 'Incorrect PIN.' });
+  const saving = await FiveYearSaving.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted +amountEncrypted +interestRateEncrypted');
+  if (!saving) return res.status(404).json({ message: 'Five-year savings record not found.' });
+  if (saving.status !== 'Active') return res.status(409).json({ message: 'Only active five-year Sanchayapatra can be closed early.' });
+  if (new Date(saving.matureDate) <= new Date()) return res.status(409).json({ message: 'This Sanchayapatra has reached its maturity date. Use Mature instead of early closure.' });
+  const item = publicSaving(saving); const principalPaisa = Math.round(item.amount * 100); const creditPaisa = Math.round(amount * 100);
+  if (creditPaisa > principalPaisa) return res.status(400).json({ message: 'Early encashment amount cannot exceed the principal amount.' });
+  await postWalletTransaction({ ownerId: req.user.id, amountPaisa: creditPaisa, type: 'five_year_savings_early_close', description: `Early closure of five-year Sanchayapatra ${item.savingsId}`, referenceKey: `five-year:${saving._id}:early-close` });
+  saving.status = 'Closed'; await saving.save();
+  await notifyUser(req.user.id, { type: 'warning', title: 'Five-Year Sanchayapatra closed early', message: `${item.savingsId} was closed. ৳${(creditPaisa / 100).toFixed(2)} was credited to available balance.`, relatedId: String(saving._id) });
+  return res.json({ message: 'Five-year Sanchayapatra closed and early encashment credited.', saving: publicSaving(saving) });
+}));
+
 router.post('/:id/mature', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid five-year savings record ID.' });
   const { pin } = req.body || {};
@@ -155,6 +175,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const current = await FiveYearSaving.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted +amountEncrypted +interestRateEncrypted');
   if (!current) return res.status(404).json({ message: 'Five-year savings record not found.' });
   if (body.status === 'Matured') return res.status(400).json({ message: 'Use POST /api/five-year-savings/:id/mature with your PIN to credit maturity proceeds.' });
+  if (body.status === 'Closed') return res.status(400).json({ message: 'Use POST /api/five-year-savings/:id/close with your PIN and earlyEncashAmount to close early.' });
   if (current.status !== 'Active') return res.status(409).json({ message: 'Only Active five-year Sanchayapatra can be edited. Matured or Closed records are read-only.' });
   if (body.amount !== undefined && current.status === 'Active') {
     const oldAmount = decryptNumber(current.amountEncrypted);
