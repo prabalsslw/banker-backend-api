@@ -66,6 +66,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
   const saving = await Saving.findOne({ _id: b.savingId, ownerId: req.user.id });
   if (!saving) return res.status(404).json({ message: 'Saving not found for this account.' });
+  if (saving.status !== 'Active') return res.status(409).json({ message: 'Payments can only be created for Active Sanchayapatra.' });
   const payment = await Payment.create({
     ownerId: req.user.id, savingId: saving._id,
     paymentNumber: Number(b.paymentNumber), amountEncrypted: encryptNumber(b.amount),
@@ -93,6 +94,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (b.isPaid !== undefined && typeof b.isPaid !== 'boolean') return res.status(400).json({ message: 'isPaid must be true or false.' });
   const current = await Payment.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+amountEncrypted +interestAmountEncrypted +creditedInterestAmountEncrypted');
   if (!current) return res.status(404).json({ message: 'Payment not found.' });
+  const parentSaving = await Saving.findOne({ _id: current.savingId, ownerId: req.user.id }).select('status');
+  if (!parentSaving) return res.status(404).json({ message: 'Parent Sanchayapatra not found.' });
+  if (parentSaving.status !== 'Active') return res.status(409).json({ message: 'Payments are read-only after Sanchayapatra is Matured or Closed.' });
   const updates = encryptedUpdates(b);
   if (!Object.keys(updates).length) return res.status(400).json({ message: 'No fields supplied.' });
   const wasPaid = current.isPaid;

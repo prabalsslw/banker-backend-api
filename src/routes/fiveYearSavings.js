@@ -155,8 +155,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const current = await FiveYearSaving.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted +amountEncrypted +interestRateEncrypted');
   if (!current) return res.status(404).json({ message: 'Five-year savings record not found.' });
   if (body.status === 'Matured') return res.status(400).json({ message: 'Use POST /api/five-year-savings/:id/mature with your PIN to credit maturity proceeds.' });
-  if (current.status !== 'Active' && Object.keys(body).some((key) => key !== 'status')) return res.status(409).json({ message: 'Only Active savings can be edited.' });
-  if (current.status !== 'Active' && body.status !== 'Active' && body.status !== 'Closed') return res.status(409).json({ message: 'This savings record is not editable.' });
+  if (current.status !== 'Active') return res.status(409).json({ message: 'Only Active five-year Sanchayapatra can be edited. Matured or Closed records are read-only.' });
   if (body.amount !== undefined && current.status === 'Active') {
     const oldAmount = decryptNumber(current.amountEncrypted);
     const deltaPaisa = Math.round((Number(body.amount) - oldAmount) * 100);
@@ -183,6 +182,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 
 router.delete('/:id', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid five-year savings record ID.' });
+  const existing = await FiveYearSaving.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted');
+  if (!existing) return res.status(404).json({ message: 'Five-year savings record not found.' });
+  if (existing.status !== 'Active') return res.status(409).json({ message: 'Matured or Closed five-year savings cannot be deleted.' });
   const deleted = await FiveYearSaving.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted');
   if (!deleted) return res.status(404).json({ message: 'Five-year savings record not found.' });
   await notifyUser(req.user.id, { type: 'warning', title: 'Five-Year Sanchayapatra deleted', message: `${decryptPrivateField(deleted.savingsIdEncrypted)} was deleted.`, relatedId: String(deleted._id) });

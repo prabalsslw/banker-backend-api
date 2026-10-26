@@ -26,7 +26,7 @@ function validateSaving(body, partial = false) {
   if (body.schemeType !== undefined && body.schemeType !== 'Sanchaypatra') errors.push('This endpoint is only for 3-monthly Sanchayapatra. Use /api/five-year-savings for the five-year scheme.');
   for (const key of ['issueDate', 'matureDate']) if (body[key] !== undefined && !parseDate(body[key])) errors.push(`${key} must be a valid date.`);
   if (body.issueDate !== undefined && body.matureDate !== undefined && parseDate(body.matureDate) && parseDate(body.issueDate) && parseDate(body.matureDate) < parseDate(body.issueDate)) errors.push('matureDate must be on or after issueDate.');
-  if (body.status !== undefined && !['Active', 'Matured', 'Inactive'].includes(body.status)) errors.push('status must be Active, Matured, or Inactive.');
+  if (body.status !== undefined && !['Active', 'Matured', 'Closed', 'Inactive'].includes(body.status)) errors.push('status must be Active, Matured, Closed, or Inactive.');
   return errors;
 }
 function encryptedSavingFields(body) {
@@ -210,8 +210,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (errors.length) return res.status(400).json({ message: 'Invalid saving data.', errors });
   const current = await Saving.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted +amountEncrypted +interestRateEncrypted');
   if (!current) return res.status(404).json({ message: 'Saving not found.' });
-  if (current.status === 'Matured' && Object.keys(body).some((key) => key !== 'status')) return res.status(409).json({ message: 'Matured savings cannot be edited.' });
   if (body.status === 'Matured') return res.status(400).json({ message: 'Use POST /api/savings/:id/mature with your PIN to credit maturity proceeds.' });
+  if (current.status !== 'Active') return res.status(409).json({ message: 'Only Active Sanchayapatra can be edited. Matured or Closed records are read-only.' });
   const updates = encryptedSavingFields(body);
   if (!Object.keys(updates).length) return res.status(400).json({ message: 'No valid fields supplied.' });
   if (body.amount !== undefined && current.status === 'Active') {
@@ -228,6 +228,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 }));
 router.delete('/:id', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid saving ID.' });
+  const existing = await Saving.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted');
+  if (!existing) return res.status(404).json({ message: 'Saving not found.' });
+  if (existing.status !== 'Active') return res.status(409).json({ message: 'Matured or Closed Sanchayapatra records cannot be deleted.' });
   const saving = await Saving.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted');
   if (!saving) return res.status(404).json({ message: 'Saving not found.' });
   await Payment.deleteMany({ savingId: saving._id, ownerId: req.user.id });

@@ -11,7 +11,7 @@ const savingSchema = new mongoose.Schema({
   // Additive field: old documents without schemeType are treated as quarterly Sanchaypatra.
   schemeType: { type: String, enum: ['Sanchaypatra', 'Five-Year Bangladesh Sanchaypatra'], default: 'Sanchaypatra', index: true },
   tenure: { type: Number, min: 1 },
-  status: { type: String, enum: ['Active', 'Matured', 'Inactive'], default: 'Active' }
+  status: { type: String, enum: ['Active', 'Matured', 'Closed', 'Inactive'], default: 'Active' }
 }, { timestamps: true, versionKey: false });
 savingSchema.index({ ownerId: 1, savingsIdLookup: 1 }, { unique: true });
 savingSchema.index({ ownerId: 1, createdAt: -1 });
