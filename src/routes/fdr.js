@@ -131,7 +131,11 @@ router.post('/:id/mature', asyncHandler(async (req, res) => {
   const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
   if (!doc) return res.status(404).json({ message: 'FDR not found.' });
   if (doc.status !== 'Active') return res.status(409).json({ message: 'Only active FDR accounts can mature.' });
-  if (new Date(doc.maturityDate) > new Date()) return res.status(409).json({ message: `This FDR has not reached maturity date ${asYmd(doc.maturityDate)} yet.` });
+  // The UI displays maturity as a calendar date, so permit maturity for the
+  // entire displayed date instead of waiting until the original timestamp.
+  const maturityDay = asYmd(doc.maturityDate);
+  const todayDay = asYmd(new Date());
+  if (maturityDay > todayDay) return res.status(409).json({ message: `This FDR has not reached maturity date ${maturityDay} yet.` });
   const principal = decryptNumber(doc.principalEncrypted);
   const rate = decryptNumber(doc.rateEncrypted);
   const tenure = decryptNumber(doc.tenureEncrypted);
@@ -155,7 +159,7 @@ router.post('/:id/close', asyncHandler(async (req, res) => {
   const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
   if (!doc) return res.status(404).json({ message: 'FDR not found.' });
   if (doc.status !== 'Active') return res.status(409).json({ message: 'Only active FDR accounts can be encashed.' });
-  if (new Date(doc.maturityDate) <= new Date()) return res.status(409).json({ message: 'This FDR has reached maturity. Use Mature instead of early encashment.' });
+  if (asYmd(doc.maturityDate) <= asYmd(new Date())) return res.status(409).json({ message: 'This FDR has reached maturity. Use Mature instead of early encashment.' });
   const principal = decryptNumber(doc.principalEncrypted);
   if (amount > principal) return res.status(400).json({ message: 'Encashment amount cannot exceed the principal amount.' });
   const creditPaisa = Math.round(amount * 100);
