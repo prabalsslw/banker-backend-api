@@ -27,6 +27,7 @@ router.post('/deposit', asyncHandler(async (req, res) => {
   const { amount, method, pin } = req.body || {};
   let amountPaisa;
   try { amountPaisa = moneyToPaisa(amount); } catch (error) { return res.status(400).json({ message: error.message }); }
+  if (amountPaisa > 1000000000) return res.status(400).json({ message: 'Maximum deposit per transaction is ৳1,00,00,000 (1 crore).' });
   if (!isNonEmptyString(method, 80)) return res.status(400).json({ message: 'A deposit method is required.' });
   if (!isValidPin(pin)) return res.status(400).json({ message: 'A valid 4-digit PIN is required.' });
   const user = await User.findById(req.user.id).select('+pinHash');

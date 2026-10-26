@@ -140,7 +140,17 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const doc = await DpsAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select(selectSensitive);
   if (!doc) return res.status(404).json({ message: 'DPS not found.' });
   if (doc.encashedAt || doc.status === 'Matured' || doc.status === 'Closed') return res.status(409).json({ message: 'A matured/closed DPS cannot be edited.' });
-  const { pin, status, ...updates } = body; const shouldEncash = status === 'Matured';
+  const currentValues = values(doc);
+  const immutableChecks = [
+    ['dpsAccountNumber', String(body.dpsAccountNumber ?? body.accountNumber ?? (doc.accountNumberEncrypted ? require('../utils/privateFields').decryptPrivateField(doc.accountNumberEncrypted) : '')) === String(doc.accountNumberEncrypted ? require('../utils/privateFields').decryptPrivateField(doc.accountNumberEncrypted) : '')],
+    ['monthlyInstallment', body.monthlyInstallment === undefined && body.monthly === undefined || Math.round(Number(body.monthlyInstallment ?? body.monthly) * 100) === currentValues.monthlyInstallmentPaisa],
+    ['tenure', body.tenure === undefined || Number(body.tenure) === Number(currentValues.tenure)],
+    ['tenureUnit', body.tenureUnit === undefined || body.tenureUnit === currentValues.tenureUnit],
+    ['interestRate', body.interestRate === undefined && body.rate === undefined || Number(body.interestRate ?? body.rate) === Number(currentValues.interestRate)],
+  ];
+  const changedImmutable = immutableChecks.find(([field, same]) => !same);
+  if (changedImmutable) return res.status(400).json({ message: `${changedImmutable[0]} cannot be changed after a DPS is created.` });
+  const { pin, status, ...updates } = body; delete updates.dpsAccountNumber; delete updates.accountNumber; delete updates.monthlyInstallment; delete updates.monthly; delete updates.tenure; delete updates.tenureUnit; delete updates.interestRate; delete updates.rate; const shouldEncash = status === 'Matured';
   if (status === 'Closed') return res.status(400).json({ message: 'Use POST /api/dps/:id/close with PIN and earlyEncashAmount to close a DPS early.' } );
   if (shouldEncash && new Date(doc.maturityDate) > new Date()) return res.status(409).json({ message: 'This DPS has not reached its maturity date. Use Close for early encashment.' });
   if (shouldEncash && !(await verifyPin(req.user.id, pin))) return res.status(401).json({ message: 'Correct 4-digit PIN is required to mature and encash this DPS.' });
