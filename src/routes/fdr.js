@@ -1,8 +1,10 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
+const User = require('../models/User');
 const FdrAccount = require('../models/FdrAccount');
 const authenticate = require('../middleware/authenticate');
 const asyncHandler = require('../utils/asyncHandler');
-const { isValidObjectId, isNonEmptyString } = require('../utils/validators');
+const { isValidObjectId, isNonEmptyString, isValidPin } = require('../utils/validators');
 const { encryptPrivateField, decryptPrivateField, encryptNumber, decryptNumber } = require('../utils/privateFields');
 const { postWalletTransaction } = require('../utils/walletLedger');
 const { notifyUser } = require('../utils/notifyUser');
@@ -81,29 +83,86 @@ router.patch('/:id/payments/:paymentId', asyncHandler(async (req, res) => {
   const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
   if (!doc) return res.status(404).json({ message: 'FDR not found.' });
   if (doc.fdrType !== 'Monthly Interest Payout') return res.status(400).json({ message: 'Monthly payments are only available for monthly interest payout FDRs.' });
+  if (doc.status !== 'Active') return res.status(409).json({ message: 'Payments cannot be changed after FDR maturity or closure.' });
   const payment = doc.payments.id(req.params.paymentId);
   if (!payment) return res.status(404).json({ message: 'Payment not found.' });
-  const nextStatus = req.body?.status;
+  const body = req.body || {};
+  const nextStatus = body.status || payment.status;
   if (!['Pending', 'Received'].includes(nextStatus)) return res.status(400).json({ message: 'Status must be Pending or Received.' });
-  if (payment.status === 'Received' && nextStatus === 'Received') {
-    if (req.body.actualAmount != null) payment.actualAmountPaisa = roundPaisa(req.body.actualAmount);
-    if (req.body.receivedDate) { const dt = new Date(req.body.receivedDate); if (Number.isNaN(dt.getTime())) return res.status(400).json({ message: 'Invalid received date.' }); payment.receivedDate = dt; }
-    await doc.save(); return res.json({ message: 'Payment updated.', payment: publicFdr(doc).payments.find(p => p.id === String(payment._id)) });
+  if (body.expectedAmount != null) {
+    const expected = Number(body.expectedAmount);
+    if (!Number.isFinite(expected) || expected < 0 || Math.round(expected * 100) / 100 !== expected) return res.status(400).json({ message: 'Expected amount must be zero or greater with at most two decimals.' });
+    payment.expectedAmountPaisa = Math.round(expected * 100);
   }
   if (nextStatus === 'Received') {
-    const actual = req.body.actualAmount == null ? Number(payment.expectedAmountPaisa) : roundPaisa(req.body.actualAmount);
-    if (!Number.isSafeInteger(actual) || actual < 0) return res.status(400).json({ message: 'Actual amount must be zero or greater with at most two decimals.' });
-    const receivedDate = req.body.receivedDate ? new Date(req.body.receivedDate) : new Date();
+    const actual = body.actualAmount == null ? Number(payment.actualAmountPaisa ?? payment.expectedAmountPaisa) / 100 : Number(body.actualAmount);
+    if (!Number.isFinite(actual) || actual < 0 || Math.round(actual * 100) / 100 !== actual) return res.status(400).json({ message: 'Actual amount must be zero or greater with at most two decimals.' });
+    const receivedDate = body.receivedDate ? new Date(body.receivedDate) : new Date();
     if (Number.isNaN(receivedDate.getTime())) return res.status(400).json({ message: 'Invalid received date.' });
-    await postWalletTransaction({ ownerId: req.user.id, amountPaisa: actual, type: 'fdr_interest_credit', description: `FDR monthly interest: ${decryptPrivateField(doc.bankEncrypted)} · payment ${payment.monthNumber}`, referenceKey: `fdr:${doc._id}:payment:${payment._id}:credit` });
-    payment.actualAmountPaisa = actual; payment.receivedDate = receivedDate; payment.status = 'Received';
+    const actualPaisa = Math.round(actual * 100);
+    if (payment.status !== 'Received') {
+      const nextVersion = Number(payment.creditVersion || 0) + 1;
+      await postWalletTransaction({ ownerId: req.user.id, amountPaisa: actualPaisa, type: 'fdr_interest_credit', description: `FDR monthly interest: ${decryptPrivateField(doc.bankEncrypted)} · payment ${payment.monthNumber}`, referenceKey: `fdr:${doc._id}:payment:${payment._id}:credit:${nextVersion}` });
+      payment.creditVersion = nextVersion;
+    } else {
+      const previous = Number(payment.actualAmountPaisa ?? 0);
+      const delta = actualPaisa - previous;
+      if (delta !== 0) await postWalletTransaction({ ownerId: req.user.id, amountPaisa: delta, type: 'fdr_interest_adjustment', description: `FDR monthly interest adjustment: ${decryptPrivateField(doc.bankEncrypted)} · payment ${payment.monthNumber}`, referenceKey: `fdr:${doc._id}:payment:${payment._id}:adjust:${actualPaisa}:${receivedDate.getTime()}`, allowNegative: true });
+    }
+    payment.actualAmountPaisa = actualPaisa; payment.receivedDate = receivedDate; payment.status = 'Received';
   } else {
-    if (payment.status === 'Received') return res.status(409).json({ message: 'A received payment cannot be changed back to pending because its wallet credit has already been posted.' });
+    if (payment.status === 'Received') {
+      const previous = Number(payment.actualAmountPaisa ?? 0);
+      if (previous > 0) await postWalletTransaction({ ownerId: req.user.id, amountPaisa: -previous, type: 'fdr_interest_reversal', description: `Reverse FDR monthly interest: ${decryptPrivateField(doc.bankEncrypted)} · payment ${payment.monthNumber}`, referenceKey: `fdr:${doc._id}:payment:${payment._id}:reversal:${payment.creditVersion || 1}`, allowNegative: true });
+    }
     payment.status = 'Pending'; payment.actualAmountPaisa = null; payment.receivedDate = null;
   }
   await doc.save();
   await notifyUser(req.user.id, { type: nextStatus === 'Received' ? 'success' : 'warning', title: 'FDR payment updated', message: `${decryptPrivateField(doc.bankEncrypted)} monthly payment #${payment.monthNumber} marked ${nextStatus.toLowerCase()}.`, relatedId: String(doc._id) });
   res.json({ message: 'Payment updated.', payment: publicFdr(doc).payments.find(p => p.id === String(payment._id)) });
+}));
+
+router.post('/:id/mature', asyncHandler(async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid FDR ID.' });
+  const { pin } = req.body || {};
+  if (!isValidPin(pin)) return res.status(400).json({ message: 'A valid 4-digit PIN is required.' });
+  const user = await User.findById(req.user.id).select('+pinHash');
+  if (!user || !(await bcrypt.compare(pin, user.pinHash))) return res.status(401).json({ message: 'Incorrect PIN.' });
+  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
+  if (!doc) return res.status(404).json({ message: 'FDR not found.' });
+  if (doc.status !== 'Active') return res.status(409).json({ message: 'Only active FDR accounts can mature.' });
+  if (new Date(doc.maturityDate) > new Date()) return res.status(409).json({ message: `This FDR has not reached maturity date ${asYmd(doc.maturityDate)} yet.` });
+  const principal = decryptNumber(doc.principalEncrypted);
+  const rate = decryptNumber(doc.rateEncrypted);
+  const tenure = decryptNumber(doc.tenureEncrypted);
+  const principalPaisa = Math.round(principal * 100);
+  const maturityInterestPaisa = doc.fdrType === 'Cumulative (Interest at Maturity)' ? Math.round(principal * rate / 100 * tenure / 12 * 100) : 0;
+  const credit = principalPaisa + maturityInterestPaisa;
+  await postWalletTransaction({ ownerId: req.user.id, amountPaisa: credit, type: 'fdr_maturity', description: `FDR maturity: ${decryptPrivateField(doc.bankEncrypted)}`, referenceKey: `fdr:${doc._id}:maturity`, allowNegative: true });
+  doc.status = 'Matured'; await doc.save();
+  await notifyUser(req.user.id, { type: 'success', title: 'FDR matured', message: `${decryptPrivateField(doc.bankEncrypted)} matured and ${ (credit / 100).toFixed(2)} Tk was credited to your available balance.`, relatedId: String(doc._id) });
+  res.json({ message: 'FDR matured and proceeds credited.', fdr: publicFdr(doc) });
+}));
+
+router.post('/:id/close', asyncHandler(async (req, res) => {
+  if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid FDR ID.' });
+  const { pin, earlyEncashAmount } = req.body || {};
+  if (!isValidPin(pin)) return res.status(400).json({ message: 'A valid 4-digit PIN is required.' });
+  const amount = Number(earlyEncashAmount);
+  if (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) / 100 !== amount) return res.status(400).json({ message: 'Encashment amount must be positive with at most two decimal places.' });
+  const user = await User.findById(req.user.id).select('+pinHash');
+  if (!user || !(await bcrypt.compare(pin, user.pinHash))) return res.status(401).json({ message: 'Incorrect PIN.' });
+  const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
+  if (!doc) return res.status(404).json({ message: 'FDR not found.' });
+  if (doc.status !== 'Active') return res.status(409).json({ message: 'Only active FDR accounts can be encashed.' });
+  if (new Date(doc.maturityDate) <= new Date()) return res.status(409).json({ message: 'This FDR has reached maturity. Use Mature instead of early encashment.' });
+  const principal = decryptNumber(doc.principalEncrypted);
+  if (amount > principal) return res.status(400).json({ message: 'Encashment amount cannot exceed the principal amount.' });
+  const creditPaisa = Math.round(amount * 100);
+  await postWalletTransaction({ ownerId: req.user.id, amountPaisa: creditPaisa, type: 'fdr_early_encash', description: `Early encashment: ${decryptPrivateField(doc.bankEncrypted)}`, referenceKey: `fdr:${doc._id}:early-close` });
+  doc.status = 'Closed'; await doc.save();
+  await notifyUser(req.user.id, { type: 'warning', title: 'FDR encashed early', message: `${decryptPrivateField(doc.bankEncrypted)} was encashed and ${(creditPaisa / 100).toFixed(2)} Tk was credited.`, relatedId: String(doc._id) });
+  res.json({ message: 'FDR encashed and proceeds credited.', fdr: publicFdr(doc) });
 }));
 router.patch('/:id', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid FDR ID.' });

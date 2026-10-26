@@ -7,6 +7,7 @@ const fdrPaymentSchema = new mongoose.Schema({
   actualAmountPaisa: { type: Number, default: null, min: 0 },
   receivedDate: { type: Date, default: null },
   status: { type: String, enum: ['Pending', 'Received'], default: 'Pending' },
+  creditVersion: { type: Number, default: 0, min: 0 },
 }, { timestamps: true });
 
 const fdrAccountSchema = new mongoose.Schema({
