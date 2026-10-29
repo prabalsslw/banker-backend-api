@@ -29,14 +29,14 @@ router.get('/statement', asyncHandler(async (req, res) => {
   const baseFilter = { ownerId };
   const [openingRows, rows] = await Promise.all([
     WalletTransaction.aggregate([{ $match: { ...baseFilter, occurredAt: { $lt: fromDate } } }, { $group: { _id: null, amountPaisa: { $sum: '$amountPaisa' } } }]),
-    WalletTransaction.find({ ...baseFilter, occurredAt: { $gte: fromDate, $lt: toExclusive } }).sort({ occurredAt: -1, _id: -1 }).limit(10000).lean()
+    WalletTransaction.find({ ...baseFilter, occurredAt: { $gte: fromDate, $lt: toExclusive } }).sort({ occurredAt: -1, createdAt: -1, _id: -1 }).limit(10000).lean()
   ]);
   const openingBalance = Number(openingRows[0]?.amountPaisa || 0) / 100;
   const transactions = rows.map((x) => ({
     id: String(x._id), amount: x.amountPaisa / 100,
     direction: x.amountPaisa >= 0 ? 'Credit' : 'Debit',
     type: x.type, description: x.description, transactionId: x.transactionId || '', remark: x.remark || '', sourceName: x.sourceName || '', sourceReference: x.sourceReference || '',
-    occurredAt: x.occurredAt, referenceKey: x.referenceKey
+    occurredAt: x.occurredAt || x.createdAt, createdAt: x.createdAt, referenceKey: x.referenceKey
   }));
   const credit = transactions.reduce((sum, x) => sum + (x.amount > 0 ? x.amount : 0), 0);
   const debit = transactions.reduce((sum, x) => sum + (x.amount < 0 ? Math.abs(x.amount) : 0), 0);
@@ -49,7 +49,7 @@ router.get('/', asyncHandler(async (req, res) => {
     WalletTransaction.find({ ownerId }).sort({ occurredAt: -1 }).limit(100).lean(),
     getBalancePaisa(req.user.id)
   ]);
-  res.json({ balance: balancePaisa / 100, transactions: rows.map(x => ({ id: String(x._id), amount: x.amountPaisa / 100, type: x.type, description: x.description, transactionId: x.transactionId || '', remark: x.remark || '', sourceName: x.sourceName || '', sourceReference: x.sourceReference || '', occurredAt: x.occurredAt })) });
+  res.json({ balance: balancePaisa / 100, transactions: rows.map(x => ({ id: String(x._id), amount: x.amountPaisa / 100, type: x.type, description: x.description, transactionId: x.transactionId || '', remark: x.remark || '', sourceName: x.sourceName || '', sourceReference: x.sourceReference || '', occurredAt: x.occurredAt || x.createdAt, createdAt: x.createdAt })) });
 }));
 router.post('/deposit', asyncHandler(async (req, res) => {
   const { amount, method, pin } = req.body || {};
