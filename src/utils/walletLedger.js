@@ -9,7 +9,7 @@ async function getBalancePaisa(ownerId, session) {
   return Number(rows[0]?.balancePaisa || 0);
 }
 
-async function postWalletTransaction({ ownerId, amountPaisa, type, description, referenceKey, allowNegative = false, transactionId, remark = '', sourceName = '', sourceReference = '' }) {
+async function postWalletTransaction({ ownerId, amountPaisa, type, description, referenceKey, allowNegative = false, transactionId, remark = '', sourceName = '', sourceReference = '', occurredAt = new Date() }) {
   if (!Number.isSafeInteger(amountPaisa) || amountPaisa === 0) throw new Error('Wallet transaction must be a non-zero amount in paisa.');
   const existing = await WalletTransaction.findOne({ ownerId, referenceKey });
   if (existing) return existing;
@@ -21,7 +21,7 @@ async function postWalletTransaction({ ownerId, amountPaisa, type, description, 
       throw error;
     }
   }
-  return WalletTransaction.create({ ownerId, amountPaisa, type, description: String(description).slice(0, 200), referenceKey, transactionId, remark, sourceName, sourceReference, occurredAt: new Date() });
+  return WalletTransaction.create({ ownerId, amountPaisa, type, description: String(description).slice(0, 200), referenceKey, transactionId, remark, sourceName, sourceReference, occurredAt });
 }
 
 module.exports = { getBalancePaisa, postWalletTransaction };
