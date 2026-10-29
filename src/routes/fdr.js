@@ -51,12 +51,13 @@ router.get('/', asyncHandler(async (req, res) => {
   // worker also runs this, so opening the app is an additional safety net.
   await processDueCumulativeFdrs({ ownerId: req.user.id });
   const docs = await FdrAccount.find({ ownerId: req.user.id }).select('+bankEncrypted +accountNumberEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted').sort({ createdAt: -1 });
-  // Backfill monthly schedules for existing monthly FDRs created before payment tracking was introduced.
+  // Backfill payout schedules for existing monthly and quarterly FDRs.
   for (const doc of docs) {
-    if (doc.fdrType === 'Monthly Interest Payout' && (!doc.payments || doc.payments.length === 0)) {
+    if (['Monthly Interest Payout', 'Quarterly Interest Payout'].includes(doc.fdrType) && (!doc.payments || doc.payments.length === 0)) {
       const principal = decryptNumber(doc.principalEncrypted); const rate = decryptNumber(doc.rateEncrypted); const tenure = decryptNumber(doc.tenureEncrypted);
-      const monthlyPaisa = Math.round(principal * rate / 1200 * 100);
-      doc.payments = Array.from({ length: Math.min(600, tenure) }, (_, i) => ({ monthNumber: i + 1, dueDate: addMonthsClamp(doc.startDate, i + 1), expectedAmountPaisa: monthlyPaisa, status: 'Pending' }));
+      const interval = doc.fdrType === 'Quarterly Interest Payout' ? 3 : 1;
+      const payoutPaisa = Math.round(principal * rate / (1200 / interval) * 100);
+      doc.payments = Array.from({ length: Math.min(600, Math.floor(tenure / interval)) }, (_, i) => ({ monthNumber: (i + 1) * interval, dueDate: addMonthsClamp(doc.startDate, (i + 1) * interval), expectedAmountPaisa: payoutPaisa, status: 'Pending' }));
       await doc.save();
     }
   }
@@ -74,8 +75,11 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!Number.isInteger(Number(tenure)) || Number(tenure) < 1 || Number(tenure) > 600) return res.status(400).json({ message: 'Tenure must be between 1 and 600 months.' });
   const startDate = new Date(); const maturityDate = addMonthsClamp(startDate, Number(tenure));
   const monthlyPaisa = Math.round((principalPaisa / 100) * Number(rate) / 1200 * 100);
-  const payments = fdrType === 'Monthly Interest Payout' ? Array.from({ length: Number(tenure) }, (_, i) => ({
-    monthNumber: i + 1, dueDate: addMonthsClamp(startDate, i + 1), expectedAmountPaisa: monthlyPaisa, status: 'Pending'
+  const payoutMonths = fdrType === 'Monthly Interest Payout' ? 1 : fdrType === 'Quarterly Interest Payout' ? 3 : 0;
+  const payoutCount = payoutMonths ? Math.floor(Number(tenure) / payoutMonths) : 0;
+  const payoutPaisa = fdrType === 'Quarterly Interest Payout' ? Math.round((principalPaisa / 100) * Number(rate) / 400 * 100) : monthlyPaisa;
+  const payments = payoutMonths ? Array.from({ length: payoutCount }, (_, i) => ({
+    monthNumber: (i + 1) * payoutMonths, dueDate: addMonthsClamp(startDate, (i + 1) * payoutMonths), expectedAmountPaisa: payoutPaisa, status: 'Pending'
   })) : [];
   const fdr = await FdrAccount.create({ ownerId: req.user.id, fdrType, bankEncrypted: encryptPrivateField(bank.trim()), accountNumberEncrypted: encryptPrivateField(accountNumber.trim()), principalEncrypted: encryptNumber(principalPaisa / 100), rateEncrypted: encryptNumber(Number(rate)), tenureEncrypted: encryptNumber(Number(tenure)), startDate, maturityDate, payments });
   try { await postWalletTransaction({ ownerId: req.user.id, amountPaisa: -principalPaisa, type: 'fdr_debit', description: `FDR principal: ${bank.trim()}`, referenceKey: `fdr:${fdr._id}:purchase` }); }
@@ -87,7 +91,7 @@ router.patch('/:id/payments/:paymentId', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id) || !isValidObjectId(req.params.paymentId)) return res.status(400).json({ message: 'Invalid FDR or payment ID.' });
   const doc = await FdrAccount.findOne({ _id: req.params.id, ownerId: req.user.id }).select('+bankEncrypted +accountNumberEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted');
   if (!doc) return res.status(404).json({ message: 'FDR not found.' });
-  if (doc.fdrType !== 'Monthly Interest Payout') return res.status(400).json({ message: 'Monthly payments are only available for monthly interest payout FDRs.' });
+  if (!['Monthly Interest Payout', 'Quarterly Interest Payout'].includes(doc.fdrType)) return res.status(400).json({ message: 'Interest payments are only available for payout FDRs.' });
   if (doc.status !== 'Active') return res.status(409).json({ message: 'Payments cannot be changed after FDR maturity or closure.' });
   const payment = doc.payments.id(req.params.paymentId);
   if (!payment) return res.status(404).json({ message: 'Payment not found.' });
@@ -107,23 +111,23 @@ router.patch('/:id/payments/:paymentId', asyncHandler(async (req, res) => {
     const actualPaisa = Math.round(actual * 100);
     if (payment.status !== 'Received') {
       const nextVersion = Number(payment.creditVersion || 0) + 1;
-      await postWalletTransaction({ ownerId: req.user.id, amountPaisa: actualPaisa, type: 'fdr_interest_credit', description: `FDR monthly interest: ${decryptPrivateField(doc.bankEncrypted)} · payment ${payment.monthNumber}`, referenceKey: `fdr:${doc._id}:payment:${payment._id}:credit:${nextVersion}` });
+      await postWalletTransaction({ ownerId: req.user.id, amountPaisa: actualPaisa, type: 'fdr_interest_credit', description: `FDR ${doc.fdrType === 'Quarterly Interest Payout' ? 'quarterly' : 'monthly'} interest: ${decryptPrivateField(doc.bankEncrypted)} · payment ${payment.monthNumber}`, referenceKey: `fdr:${doc._id}:payment:${payment._id}:credit:${nextVersion}` });
       payment.creditVersion = nextVersion;
     } else {
       const previous = Number(payment.actualAmountPaisa ?? 0);
       const delta = actualPaisa - previous;
-      if (delta !== 0) await postWalletTransaction({ ownerId: req.user.id, amountPaisa: delta, type: 'fdr_interest_adjustment', description: `FDR monthly interest adjustment: ${decryptPrivateField(doc.bankEncrypted)} · payment ${payment.monthNumber}`, referenceKey: `fdr:${doc._id}:payment:${payment._id}:adjust:${actualPaisa}:${receivedDate.getTime()}`, allowNegative: true });
+      if (delta !== 0) await postWalletTransaction({ ownerId: req.user.id, amountPaisa: delta, type: 'fdr_interest_adjustment', description: `FDR interest adjustment: ${decryptPrivateField(doc.bankEncrypted)} · payment ${payment.monthNumber}`, referenceKey: `fdr:${doc._id}:payment:${payment._id}:adjust:${actualPaisa}:${receivedDate.getTime()}`, allowNegative: true });
     }
     payment.actualAmountPaisa = actualPaisa; payment.receivedDate = receivedDate; payment.status = 'Received';
   } else {
     if (payment.status === 'Received') {
       const previous = Number(payment.actualAmountPaisa ?? 0);
-      if (previous > 0) await postWalletTransaction({ ownerId: req.user.id, amountPaisa: -previous, type: 'fdr_interest_reversal', description: `Reverse FDR monthly interest: ${decryptPrivateField(doc.bankEncrypted)} · payment ${payment.monthNumber}`, referenceKey: `fdr:${doc._id}:payment:${payment._id}:reversal:${payment.creditVersion || 1}`, allowNegative: true });
+      if (previous > 0) await postWalletTransaction({ ownerId: req.user.id, amountPaisa: -previous, type: 'fdr_interest_reversal', description: `Reverse FDR interest: ${decryptPrivateField(doc.bankEncrypted)} · payment ${payment.monthNumber}`, referenceKey: `fdr:${doc._id}:payment:${payment._id}:reversal:${payment.creditVersion || 1}`, allowNegative: true });
     }
     payment.status = 'Pending'; payment.actualAmountPaisa = null; payment.receivedDate = null;
   }
   await doc.save();
-  await notifyUser(req.user.id, { type: nextStatus === 'Received' ? 'success' : 'warning', title: 'FDR payment updated', message: `${decryptPrivateField(doc.bankEncrypted)} monthly payment #${payment.monthNumber} marked ${nextStatus.toLowerCase()}.`, relatedId: String(doc._id) });
+  await notifyUser(req.user.id, { type: nextStatus === 'Received' ? 'success' : 'warning', title: 'FDR payment updated', message: `${decryptPrivateField(doc.bankEncrypted)} ${doc.fdrType === 'Quarterly Interest Payout' ? 'quarterly' : 'monthly'} payment #${payment.monthNumber} marked ${nextStatus.toLowerCase()}.`, relatedId: String(doc._id) });
   res.json({ message: 'Payment updated.', payment: publicFdr(doc).payments.find(p => p.id === String(payment._id)) });
 }));
 
@@ -180,10 +184,11 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (!isNonEmptyString(accountNumber, 80)) return res.status(400).json({ message: 'FDR account number is required.' });
   if (!Number.isFinite(Number(rate)) || Number(rate) < 0 || Number(rate) > 100) return res.status(400).json({ message: 'Interest rate must be between 0 and 100.' });
   doc.bankEncrypted = encryptPrivateField(bank.trim()); doc.accountNumberEncrypted = encryptPrivateField(accountNumber.trim()); doc.rateEncrypted = encryptNumber(Number(rate));
-  if (doc.fdrType === 'Monthly Interest Payout') {
+  if (['Monthly Interest Payout', 'Quarterly Interest Payout'].includes(doc.fdrType)) {
     const principal = decryptNumber(doc.principalEncrypted); const tenure = decryptNumber(doc.tenureEncrypted);
-    const monthlyPaisa = Math.round(principal * Number(rate) / 1200 * 100);
-    doc.payments = Array.from({ length: tenure }, (_, i) => ({ monthNumber: i + 1, dueDate: addMonthsClamp(doc.startDate, i + 1), expectedAmountPaisa: monthlyPaisa, status: 'Pending' }));
+    const interval = doc.fdrType === 'Quarterly Interest Payout' ? 3 : 1;
+    const payoutPaisa = Math.round(principal * Number(rate) / (1200 / interval) * 100);
+    doc.payments = Array.from({ length: Math.floor(tenure / interval) }, (_, i) => ({ monthNumber: (i + 1) * interval, dueDate: addMonthsClamp(doc.startDate, (i + 1) * interval), expectedAmountPaisa: payoutPaisa, status: 'Pending' }));
   }
   await doc.save(); res.json({ message: 'FDR updated.', fdr: publicFdr(doc) });
 }));

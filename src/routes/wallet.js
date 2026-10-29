@@ -29,7 +29,7 @@ router.get('/statement', asyncHandler(async (req, res) => {
   const baseFilter = { ownerId };
   const [openingRows, rows] = await Promise.all([
     WalletTransaction.aggregate([{ $match: { ...baseFilter, occurredAt: { $lt: fromDate } } }, { $group: { _id: null, amountPaisa: { $sum: '$amountPaisa' } } }]),
-    WalletTransaction.find({ ...baseFilter, occurredAt: { $gte: fromDate, $lt: toExclusive } }).sort({ occurredAt: 1, _id: 1 }).limit(10000).lean()
+    WalletTransaction.find({ ...baseFilter, occurredAt: { $gte: fromDate, $lt: toExclusive } }).sort({ occurredAt: -1, _id: -1 }).limit(10000).lean()
   ]);
   const openingBalance = Number(openingRows[0]?.amountPaisa || 0) / 100;
   const transactions = rows.map((x) => ({
