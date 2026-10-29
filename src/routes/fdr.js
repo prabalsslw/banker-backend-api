@@ -8,6 +8,7 @@ const { isValidObjectId, isNonEmptyString, isValidPin } = require('../utils/vali
 const { encryptPrivateField, decryptPrivateField, encryptNumber, decryptNumber } = require('../utils/privateFields');
 const { postWalletTransaction } = require('../utils/walletLedger');
 const { notifyUser } = require('../utils/notifyUser');
+const { processDueCumulativeFdrs } = require('../utils/fdrMaturity');
 const router = express.Router();
 router.use(authenticate);
 
@@ -46,6 +47,9 @@ function publicFdr(doc) {
     interestPerPayout, payoutFrequency: fdrType === 'Monthly Interest Payout' ? 'Monthly' : fdrType === 'Quarterly Interest Payout' ? 'Quarterly' : 'At maturity', payments };
 }
 router.get('/', asyncHandler(async (req, res) => {
+  // Reconcile any due cumulative FDRs before returning the list. The scheduled
+  // worker also runs this, so opening the app is an additional safety net.
+  await processDueCumulativeFdrs({ ownerId: req.user.id });
   const docs = await FdrAccount.find({ ownerId: req.user.id }).select('+bankEncrypted +accountNumberEncrypted +principalEncrypted +rateEncrypted +tenureEncrypted').sort({ createdAt: -1 });
   // Backfill monthly schedules for existing monthly FDRs created before payment tracking was introduced.
   for (const doc of docs) {
