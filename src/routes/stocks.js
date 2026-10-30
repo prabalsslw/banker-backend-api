@@ -51,22 +51,33 @@ router.delete('/favourites/:symbol', asyncHandler(async (req, res) => {
 }));
 
 // Public TradingView scanner data is indicative and may be delayed; it is not a licensed DSE real-time feed.
+// Keep a last-known-good snapshot in process memory. Market failures must never take down portfolio APIs.
+let lastGoodMarket = { stocks: [], totalCompanies: 0, timestamp: null, cachedAt: 0 };
 router.get('/market', asyncHandler(async (req, res) => {
   const search = String(req.query.search || '').trim().toUpperCase().slice(0, 40);
   const url = process.env.DSE_MARKET_API_URL || 'https://scanner.tradingview.com/bangladesh/scan';
-  const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'bAnker/1.0' }, body: JSON.stringify({
-    filter: [{ left: 'type', operation: 'in_range', right: ['stock'] }], options: { lang: 'en' }, markets: ['bangladesh'],
-    symbols: { query: { types: [] }, tickers: [] }, columns: ['name', 'description', 'close', 'change', 'change_abs', 'volume', 'market_cap_basic', 'sector'],
-    sort: { sortBy: 'market_cap_basic', sortOrder: 'desc' }, range: [0, 500]
-  }), signal: AbortSignal.timeout(12000) });
-  if (!response.ok) return res.status(502).json({ message: 'DSE market data provider is temporarily unavailable.' });
-  const payload = await response.json();
-  const rows = Array.isArray(payload.data) ? payload.data : [];
-  const stocks = rows.map((row) => { const d = row.d || []; return { symbol: String(d[0] || '').toUpperCase(), name: String(d[1] || d[0] || ''), price: Number(d[2] || 0), changePercent: Number(d[3] || 0), change: Number(d[4] || 0), volume: Number(d[5] || 0), marketCap: Number(d[6] || 0), sector: String(d[7] || '') }; })
-    .filter((s) => s.symbol && s.price > 0 && (!search || s.symbol.includes(search) || s.name.toUpperCase().includes(search)))
-    .slice(0, search ? 80 : 100);
-  res.set('Cache-Control', 'private, max-age=30');
-  res.json({ stocks, source: 'TradingView Bangladesh market scanner (unofficial indicative data)', delayed: true, timestamp: new Date().toISOString() });
+  try {
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'bAnker/1.0' }, body: JSON.stringify({
+      filter: [{ left: 'type', operation: 'in_range', right: ['stock'] }], options: { lang: 'en' }, markets: ['bangladesh'],
+      symbols: { query: { types: [] }, tickers: [] }, columns: ['name', 'description', 'close', 'change', 'change_abs', 'volume', 'market_cap_basic', 'sector'],
+      sort: { sortBy: 'market_cap_basic', sortOrder: 'desc' }, range: [0, 500]
+    }), signal: AbortSignal.timeout(10000) });
+    if (!response.ok) throw new Error(`Market provider returned ${response.status}`);
+    const payload = await response.json();
+    if (!Array.isArray(payload.data)) throw new Error('Market provider returned an unexpected response.');
+    const rows = payload.data;
+    const stocks = rows.map((row) => { const d = row.d || []; return { symbol: String(d[0] || '').toUpperCase(), name: String(d[1] || d[0] || ''), price: Number(d[2] || 0), changePercent: Number(d[3] || 0), change: Number(d[4] || 0), volume: Number(d[5] || 0), marketCap: Number(d[6] || 0), sector: String(d[7] || '') }; })
+      .filter((s) => s.symbol && s.name)
+      .slice(0, 500);
+    lastGoodMarket = { stocks, totalCompanies: stocks.length, timestamp: new Date().toISOString(), cachedAt: Date.now() };
+    const filtered = stocks.filter((s) => !search || s.symbol.includes(search) || s.name.toUpperCase().includes(search)).slice(0, search ? 80 : 100);
+    res.set('Cache-Control', 'private, max-age=30');
+    return res.json({ stocks: filtered, totalCompanies: stocks.length, loadedCompanies: stocks.length, source: 'TradingView Bangladesh market scanner (unofficial indicative data)', delayed: true, unavailable: false, stale: false, timestamp: lastGoodMarket.timestamp });
+  } catch (error) {
+    const cached = lastGoodMarket.stocks.filter((s) => !search || s.symbol.includes(search) || s.name.toUpperCase().includes(search)).slice(0, search ? 80 : 100);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ stocks: cached, totalCompanies: lastGoodMarket.totalCompanies || lastGoodMarket.stocks.length, loadedCompanies: lastGoodMarket.totalCompanies || lastGoodMarket.stocks.length, source: cached.length ? 'Last successful TradingView Bangladesh scanner response' : 'Market provider unavailable', delayed: true, unavailable: true, stale: cached.length > 0, timestamp: lastGoodMarket.timestamp, message: 'Market prices are temporarily unavailable. Portfolio and manual trade entry remain available.' });
+  }
 }));
 
 router.post('/buy', asyncHandler(async (req, res) => {
