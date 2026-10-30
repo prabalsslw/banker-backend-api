@@ -231,3 +231,7 @@ This encrypted schema is not compatible with existing plaintext records from the
 - Amounts and interest rates are encrypted strings in the database, so MongoDB cannot natively sort, aggregate, or filter by those numeric values. Do such calculations in trusted backend code after decryption, or keep carefully considered non-sensitive derived fields if the product requires database-side analytics.
 - All protected queries must scope data by the verified user's `ownerId`.
 - Four-digit PINs are weak even when hashed. Add stronger authentication, account-level lockout, monitoring, audit logging, backups and a professional security review before production use.
+
+## Reminders
+
+The authenticated `/api/reminders` endpoints support multiple per-user reminders with a title, optional short description, scheduled date/time, completion state, and device notification identifier. See the project-root `REMINDER_FEATURE_UPDATE.md` for the frontend scheduling and native build requirements.

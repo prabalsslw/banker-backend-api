@@ -59,6 +59,7 @@ app.use('/api/expenses', require('./routes/expenses'));
 app.use('/api/todos', require('./routes/todos'));
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/reminders', require('./routes/reminders'));
 app.use('/api/backup', require('./routes/backup'));
 
 app.use(notFound);

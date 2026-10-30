@@ -1,6 +1,7 @@
 const express = require('express');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
+const Reminder = require('../models/Reminder');
 const authenticate = require('../middleware/authenticate');
 const asyncHandler = require('../utils/asyncHandler');
 const { isValidObjectId, isNonEmptyString } = require('../utils/validators');
@@ -9,6 +10,13 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/', asyncHandler(async (req, res) => {
+  const dueReminders = await Reminder.find({ ownerId: req.user.id, status: 'active', scheduledAt: { $lte: new Date() } }).limit(100);
+  for (const reminder of dueReminders) {
+    const relatedId = `reminder:${reminder._id}`;
+    const exists = await Notification.exists({ ownerId: req.user.id, relatedId });
+    if (!exists) await Notification.create({ ownerId: req.user.id, type: 'reminder', service: 'reminder', title: reminder.title, message: reminder.description || 'Your reminder is due now.', relatedId });
+    if (!reminder.firedAt) { reminder.firedAt = new Date(); await reminder.save(); }
+  }
   const filter = { ownerId: req.user.id };
   if (req.query.isRead !== undefined) {
     if (!['true', 'false'].includes(req.query.isRead)) return res.status(400).json({ message: 'isRead must be true or false.' });
