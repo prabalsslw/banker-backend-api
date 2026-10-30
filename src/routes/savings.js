@@ -139,7 +139,7 @@ router.post('/', asyncHandler(async (req, res) => {
     if (error.status === 409) return res.status(409).json({ message: error.message });
     throw error;
   }
-  await notifyUser(req.user.id, { type: 'success', title: 'Sanchayapatra created', message: `${String(body.savingsId).trim()} was created and ৳${Number(body.amount).toFixed(2)} was deducted from your available balance.`, relatedId: String(saving._id) });
+  await notifyUser(req.user.id, { type: 'success', title: 'Sanchayapatra created', message: `${String(body.savingsId).trim()} was created and ৳${Number(body.amount).toFixed(2)} was deducted from your available balance.`, relatedId: String(saving._id), service: 'savings3Month' });
   res.status(201).json({ message: 'Saving created.', saving: publicSaving(saving) });
 }));
 
@@ -202,7 +202,7 @@ router.post('/:id/close', asyncHandler(async (req, res) => {
   if (creditPaisa > principalPaisa) return res.status(400).json({ message: 'Early encashment amount cannot exceed the principal amount.' });
   await postWalletTransaction({ ownerId: req.user.id, amountPaisa: creditPaisa, type: 'savings_early_close', description: `Early closure of 3-month Sanchayapatra ${decryptPrivateField(saving.savingsIdEncrypted)}`, referenceKey: `savings:${saving._id}:early-close` });
   saving.status = 'Closed'; await saving.save();
-  await notifyUser(req.user.id, { type: 'warning', title: 'Sanchayapatra closed early', message: `${decryptPrivateField(saving.savingsIdEncrypted)} was closed. ৳${(creditPaisa / 100).toFixed(2)} was credited to available balance.`, relatedId: String(saving._id) });
+  await notifyUser(req.user.id, { type: 'warning', title: 'Sanchayapatra closed early', message: `${decryptPrivateField(saving.savingsIdEncrypted)} was closed. ৳${(creditPaisa / 100).toFixed(2)} was credited to available balance.`, relatedId: String(saving._id), service: 'savings3Month' });
   return res.json({ message: 'Sanchayapatra closed and early encashment credited.', saving: publicSaving(saving) });
 }));
 
@@ -220,7 +220,7 @@ router.post('/:id/mature', asyncHandler(async (req, res) => {
   const principalPaisa = Math.round(decryptNumber(saving.amountEncrypted) * 100);
   await postWalletTransaction({ ownerId: req.user.id, amountPaisa: principalPaisa, type: 'savings_maturity', description: `3-month Sanchayapatra maturity: ${decryptPrivateField(saving.savingsIdEncrypted)}`, referenceKey: `savings:${saving._id}:maturity`, allowNegative: true });
   saving.status = 'Matured'; await saving.save();
-  await notifyUser(req.user.id, { type: 'success', title: 'Sanchayapatra matured', message: `${decryptPrivateField(saving.savingsIdEncrypted)} matured; principal ৳${(principalPaisa / 100).toFixed(2)} was credited to your available balance.`, relatedId: String(saving._id) });
+  await notifyUser(req.user.id, { type: 'success', title: 'Sanchayapatra matured', message: `${decryptPrivateField(saving.savingsIdEncrypted)} matured; principal ৳${(principalPaisa / 100).toFixed(2)} was credited to your available balance.`, relatedId: String(saving._id), service: 'savings3Month' });
   res.json({ message: 'Sanchayapatra matured and principal credited.', saving: publicSaving(saving) });
 }));
 
@@ -245,7 +245,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (body.interestRate !== undefined && (saving.schemeType || 'Sanchaypatra') === 'Sanchaypatra') {
     await Payment.updateMany({ ownerId: req.user.id, savingId: saving._id }, { $set: { interestAmountEncrypted: encryptNumber(Number(body.interestRate)) } });
   }
-  await notifyUser(req.user.id, { type: 'info', title: 'Sanchayapatra updated', message: `${decryptPrivateField(saving.savingsIdEncrypted)} details were updated.`, relatedId: String(saving._id) });
+  await notifyUser(req.user.id, { type: 'info', title: 'Sanchayapatra updated', message: `${decryptPrivateField(saving.savingsIdEncrypted)} details were updated.`, relatedId: String(saving._id), service: 'savings3Month' });
   res.json({ message: 'Saving updated.', saving: publicSaving(saving) });
 }));
 router.delete('/:id', asyncHandler(async (req, res) => {
@@ -256,7 +256,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   const saving = await Saving.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted');
   if (!saving) return res.status(404).json({ message: 'Saving not found.' });
   await Payment.deleteMany({ savingId: saving._id, ownerId: req.user.id });
-  await notifyUser(req.user.id, { type: 'warning', title: 'Sanchayapatra deleted', message: `${decryptPrivateField(saving.savingsIdEncrypted)} and its payment schedule were deleted.`, relatedId: String(saving._id) });
+  await notifyUser(req.user.id, { type: 'warning', title: 'Sanchayapatra deleted', message: `${decryptPrivateField(saving.savingsIdEncrypted)} and its payment schedule were deleted.`, relatedId: String(saving._id), service: 'savings3Month' });
   res.json({ message: 'Saving and its payment schedule deleted.' });
 }));
 module.exports = router;

@@ -103,7 +103,7 @@ router.post('/buy', asyncHandler(async (req, res) => {
       saved = { id: String(holding._id), ...data };
     });
   } finally { await session.endSession(); }
-  try { await notifyUser(req.user.id, { type: 'success', title: 'Stock purchase recorded', message: `${quantity} ${symbol} shares purchased for ৳${(investedPaisa / 100).toFixed(2)}. Ref: ${refId}`, relatedId: refId }); } catch (_error) { /* A notification failure must not undo a committed trade. */ }
+  try { await notifyUser(req.user.id, { type: 'success', title: 'Stock purchase recorded', message: `${quantity} ${symbol} shares purchased for ৳${(investedPaisa / 100).toFixed(2)}. Ref: ${refId}`, relatedId: refId, service: 'stock' }); } catch (_error) { /* A notification failure must not undo a committed trade. */ }
   res.status(201).json({ message: 'Stock purchase recorded.', holding: saved, transactionId: refId });
 }));
 
@@ -128,7 +128,7 @@ router.post('/sell', asyncHandler(async (req, res) => {
       saved = { id: String(holding._id), ...data };
     });
   } finally { await session.endSession(); }
-  try { await notifyUser(req.user.id, { type: 'success', title: 'Stock sale recorded', message: `${quantity} ${symbol} shares sold. ৳${(proceedsPaisa / 100).toFixed(2)} credited to your balance. Ref: ${refId}`, relatedId: refId }); } catch (_error) { /* A notification failure must not undo a committed trade. */ }
+  try { await notifyUser(req.user.id, { type: 'success', title: 'Stock sale recorded', message: `${quantity} ${symbol} shares sold. ৳${(proceedsPaisa / 100).toFixed(2)} credited to your balance. Ref: ${refId}`, relatedId: refId, service: 'stock' }); } catch (_error) { /* A notification failure must not undo a committed trade. */ }
   res.json({ message: 'Stock sale recorded.', holding: saved, transactionId: refId, creditedAmount: proceedsPaisa / 100 });
 }));
 module.exports = router;

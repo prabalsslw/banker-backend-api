@@ -113,7 +113,7 @@ router.post('/', asyncHandler(async (req, res) => {
       if (walletError.status === 409) return res.status(409).json({ message: walletError.message });
       throw walletError;
     }
-    await notifyUser(req.user.id, { type: 'success', title: 'Five-Year Sanchayapatra created', message: `${String(body.savingsId).trim()} was created and ৳${Number(body.amount).toFixed(2)} was deducted from your available balance.`, relatedId: String(saving._id) });
+    await notifyUser(req.user.id, { type: 'success', title: 'Five-Year Sanchayapatra created', message: `${String(body.savingsId).trim()} was created and ৳${Number(body.amount).toFixed(2)} was deducted from your available balance.`, relatedId: String(saving._id), service: 'savings5Year' });
     return res.status(201).json({ message: 'Five-year Sanchayapatra created.', saving: publicSaving(saving) });
   } catch (error) {
     if (error && error.code === 11000) return res.status(409).json({ message: 'Savings ID already exists in the five-year scheme.' });
@@ -137,7 +137,7 @@ router.post('/:id/close', asyncHandler(async (req, res) => {
   if (creditPaisa > principalPaisa) return res.status(400).json({ message: 'Early encashment amount cannot exceed the principal amount.' });
   await postWalletTransaction({ ownerId: req.user.id, amountPaisa: creditPaisa, type: 'five_year_savings_early_close', description: `Early closure of five-year Sanchayapatra ${item.savingsId}`, referenceKey: `five-year:${saving._id}:early-close` });
   saving.status = 'Closed'; await saving.save();
-  await notifyUser(req.user.id, { type: 'warning', title: 'Five-Year Sanchayapatra closed early', message: `${item.savingsId} was closed. ৳${(creditPaisa / 100).toFixed(2)} was credited to available balance.`, relatedId: String(saving._id) });
+  await notifyUser(req.user.id, { type: 'warning', title: 'Five-Year Sanchayapatra closed early', message: `${item.savingsId} was closed. ৳${(creditPaisa / 100).toFixed(2)} was credited to available balance.`, relatedId: String(saving._id), service: 'savings5Year' });
   return res.json({ message: 'Five-year Sanchayapatra closed and early encashment credited.', saving: publicSaving(saving) });
 }));
 
@@ -155,7 +155,7 @@ router.post('/:id/mature', asyncHandler(async (req, res) => {
   const item = publicSaving(saving); const amountPaisa = Math.round(item.maturityValue * 100);
   await postWalletTransaction({ ownerId: req.user.id, amountPaisa, type: 'five_year_savings_maturity', description: `Five-year Sanchayapatra maturity: ${item.savingsId}`, referenceKey: `five-year:${saving._id}:maturity`, allowNegative: true });
   saving.status = 'Matured'; await saving.save();
-  await notifyUser(req.user.id, { type: 'success', title: 'Five-Year Sanchayapatra matured', message: `${item.savingsId} matured; principal plus estimated profit ৳${item.maturityValue.toFixed(2)} was credited to your available balance.`, relatedId: String(saving._id) });
+  await notifyUser(req.user.id, { type: 'success', title: 'Five-Year Sanchayapatra matured', message: `${item.savingsId} matured; principal plus estimated profit ৳${item.maturityValue.toFixed(2)} was credited to your available balance.`, relatedId: String(saving._id), service: 'savings5Year' });
   res.json({ message: 'Five-year Sanchayapatra matured and proceeds credited.', saving: publicSaving(saving) });
 }));
 
@@ -193,7 +193,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     await current.save();
     const fresh = await FiveYearSaving.findOne({ _id: current._id, ownerId: req.user.id })
       .select('+savingsIdEncrypted +amountEncrypted +interestRateEncrypted');
-    await notifyUser(req.user.id, { type: 'info', title: 'Five-Year Sanchayapatra updated', message: `${publicSaving(fresh).savingsId} details were updated.`, relatedId: String(fresh._id) });
+    await notifyUser(req.user.id, { type: 'info', title: 'Five-Year Sanchayapatra updated', message: `${publicSaving(fresh).savingsId} details were updated.`, relatedId: String(fresh._id), service: 'savings5Year' });
     return res.json({ message: 'Five-year Sanchayapatra updated.', saving: publicSaving(fresh) });
   } catch (error) {
     if (error && error.code === 11000) return res.status(409).json({ message: 'Savings ID already exists in the five-year scheme.' });
@@ -208,7 +208,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   if (existing.status !== 'Active') return res.status(409).json({ message: 'Matured or Closed five-year savings cannot be deleted.' });
   const deleted = await FiveYearSaving.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id }).select('+savingsIdEncrypted');
   if (!deleted) return res.status(404).json({ message: 'Five-year savings record not found.' });
-  await notifyUser(req.user.id, { type: 'warning', title: 'Five-Year Sanchayapatra deleted', message: `${decryptPrivateField(deleted.savingsIdEncrypted)} was deleted.`, relatedId: String(deleted._id) });
+  await notifyUser(req.user.id, { type: 'warning', title: 'Five-Year Sanchayapatra deleted', message: `${decryptPrivateField(deleted.savingsIdEncrypted)} was deleted.`, relatedId: String(deleted._id), service: 'savings5Year' });
   res.json({ message: 'Five-year Sanchayapatra deleted.' });
 }));
 

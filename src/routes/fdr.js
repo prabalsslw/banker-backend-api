@@ -84,7 +84,7 @@ router.post('/', asyncHandler(async (req, res) => {
   const fdr = await FdrAccount.create({ ownerId: req.user.id, fdrType, bankEncrypted: encryptPrivateField(bank.trim()), accountNumberEncrypted: encryptPrivateField(accountNumber.trim()), principalEncrypted: encryptNumber(principalPaisa / 100), rateEncrypted: encryptNumber(Number(rate)), tenureEncrypted: encryptNumber(Number(tenure)), startDate, maturityDate, payments });
   try { await postWalletTransaction({ ownerId: req.user.id, amountPaisa: -principalPaisa, type: 'fdr_debit', description: `FDR principal: ${bank.trim()}`, referenceKey: `fdr:${fdr._id}:purchase` }); }
   catch (e) { await FdrAccount.deleteOne({ _id: fdr._id, ownerId: req.user.id }); if (e.status === 409) return res.status(409).json({ message: e.message }); throw e; }
-  await notifyUser(req.user.id, { type: 'success', title: 'FDR created', message: `${bank.trim()} (${fdrType}) FDR opened; ৳${(principalPaisa/100).toFixed(2)} was deducted from available balance.`, relatedId: String(fdr._id) });
+  await notifyUser(req.user.id, { type: 'success', title: 'FDR created', message: `${bank.trim()} (${fdrType}) FDR opened; ৳${(principalPaisa/100).toFixed(2)} was deducted from available balance.`, relatedId: String(fdr._id), service: (fdr.fdrType === 'Cumulative Deposit' ? 'fdrCumulative' : (fdr.fdrType === 'Quarterly Interest Payout' ? 'fdrQuarterly' : 'fdrMonthly')) });
   res.status(201).json({ message: 'FDR created.', fdr: publicFdr(fdr) });
 }));
 router.patch('/:id/payments/:paymentId', asyncHandler(async (req, res) => {
@@ -127,7 +127,7 @@ router.patch('/:id/payments/:paymentId', asyncHandler(async (req, res) => {
     payment.status = 'Pending'; payment.actualAmountPaisa = null; payment.receivedDate = null;
   }
   await doc.save();
-  await notifyUser(req.user.id, { type: nextStatus === 'Received' ? 'success' : 'warning', title: 'FDR payment updated', message: `${decryptPrivateField(doc.bankEncrypted)} ${doc.fdrType === 'Quarterly Interest Payout' ? 'quarterly' : 'monthly'} payment #${payment.monthNumber} marked ${nextStatus.toLowerCase()}.`, relatedId: String(doc._id) });
+  await notifyUser(req.user.id, { type: nextStatus === 'Received' ? 'success' : 'warning', title: 'FDR payment updated', message: `${decryptPrivateField(doc.bankEncrypted)} ${doc.fdrType === 'Quarterly Interest Payout' ? 'quarterly' : 'monthly'} payment #${payment.monthNumber} marked ${nextStatus.toLowerCase()}.`, relatedId: String(doc._id), service: (doc.fdrType === 'Cumulative Deposit' ? 'fdrCumulative' : (doc.fdrType === 'Quarterly Interest Payout' ? 'fdrQuarterly' : 'fdrMonthly')) });
   res.json({ message: 'Payment updated.', payment: publicFdr(doc).payments.find(p => p.id === String(payment._id)) });
 }));
 
@@ -149,7 +149,7 @@ router.post('/:id/mature', asyncHandler(async (req, res) => {
   const credit = principalPaisa + maturityInterestPaisa;
   await postWalletTransaction({ ownerId: req.user.id, amountPaisa: credit, type: 'fdr_maturity', description: `FDR maturity: ${decryptPrivateField(doc.bankEncrypted)}`, referenceKey: `fdr:${doc._id}:maturity`, allowNegative: true });
   doc.status = 'Matured'; await doc.save();
-  await notifyUser(req.user.id, { type: 'success', title: 'FDR matured', message: `${decryptPrivateField(doc.bankEncrypted)} matured and ${ (credit / 100).toFixed(2)} Tk was credited to your available balance.`, relatedId: String(doc._id) });
+  await notifyUser(req.user.id, { type: 'success', title: 'FDR matured', message: `${decryptPrivateField(doc.bankEncrypted)} matured and ${ (credit / 100).toFixed(2)} Tk was credited to your available balance.`, relatedId: String(doc._id), service: (doc.fdrType === 'Cumulative Deposit' ? 'fdrCumulative' : (doc.fdrType === 'Quarterly Interest Payout' ? 'fdrQuarterly' : 'fdrMonthly')) });
   res.json({ message: 'FDR matured and proceeds credited.', fdr: publicFdr(doc) });
 }));
 
@@ -170,7 +170,7 @@ router.post('/:id/close', asyncHandler(async (req, res) => {
   const creditPaisa = Math.round(amount * 100);
   await postWalletTransaction({ ownerId: req.user.id, amountPaisa: creditPaisa, type: 'fdr_early_encash', description: `Early encashment: ${decryptPrivateField(doc.bankEncrypted)}`, referenceKey: `fdr:${doc._id}:early-close` });
   doc.status = 'Closed'; await doc.save();
-  await notifyUser(req.user.id, { type: 'warning', title: 'FDR encashed early', message: `${decryptPrivateField(doc.bankEncrypted)} was encashed and ${(creditPaisa / 100).toFixed(2)} Tk was credited.`, relatedId: String(doc._id) });
+  await notifyUser(req.user.id, { type: 'warning', title: 'FDR encashed early', message: `${decryptPrivateField(doc.bankEncrypted)} was encashed and ${(creditPaisa / 100).toFixed(2)} Tk was credited.`, relatedId: String(doc._id), service: (doc.fdrType === 'Cumulative Deposit' ? 'fdrCumulative' : (doc.fdrType === 'Quarterly Interest Payout' ? 'fdrQuarterly' : 'fdrMonthly')) });
   res.json({ message: 'FDR encashed and proceeds credited.', fdr: publicFdr(doc) });
 }));
 router.patch('/:id', asyncHandler(async (req, res) => {
@@ -199,7 +199,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   if (doc.status !== 'Active') return res.status(409).json({ message: 'Only active FDR can be deleted.' });
   const item = publicFdr(doc); await postWalletTransaction({ ownerId: req.user.id, amountPaisa: Math.round(item.principal * 100), type: 'adjustment', description: `FDR principal returned: ${item.bank}`, referenceKey: `fdr:${doc._id}:refund`, allowNegative: true });
   await FdrAccount.deleteOne({ _id: doc._id, ownerId: req.user.id });
-  await notifyUser(req.user.id, { type: 'warning', title: 'FDR deleted', message: `${item.bank} FDR was deleted and principal ৳${item.principal.toFixed(2)} returned to available balance.`, relatedId: String(doc._id) });
+  await notifyUser(req.user.id, { type: 'warning', title: 'FDR deleted', message: `${item.bank} FDR was deleted and principal ৳${item.principal.toFixed(2)} returned to available balance.`, relatedId: String(doc._id), service: (doc.fdrType === 'Cumulative Deposit' ? 'fdrCumulative' : (doc.fdrType === 'Quarterly Interest Payout' ? 'fdrQuarterly' : 'fdrMonthly')) });
   res.json({ message: 'FDR deleted and principal returned.' });
 }));
 module.exports = router;

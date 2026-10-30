@@ -4,6 +4,7 @@ const authenticate = require('../middleware/authenticate');
 const asyncHandler = require('../utils/asyncHandler');
 const { isValidObjectId, isNonEmptyString, parseDate } = require('../utils/validators');
 const { encryptPrivateField, decryptPrivateField } = require('../utils/privateFields');
+const { notifyUser } = require('../utils/notifyUser');
 
 const router = express.Router();
 router.use(authenticate);
@@ -60,6 +61,7 @@ router.post('/', asyncHandler(async (req, res) => {
     description: String(description || '').trim(),
     dueDate: parsedDueDate
   });
+  await notifyUser(req.user.id, { type: 'success', title: 'To-do created', message: `${title.trim()} was added to your to-do list.`, relatedId: String(todo._id), service: 'todo' });
   res.status(201).json({ message: 'To-do created.', todo: cleanTodo(todo) });
 }));
 
@@ -93,6 +95,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (body.title !== undefined) updateDoc.$unset = { title: 1 };
   const todo = await Todo.findOneAndUpdate({ _id: req.params.id, ownerId: req.user.id }, updateDoc, { new: true, runValidators: true });
   if (!todo) return res.status(404).json({ message: 'To-do not found.' });
+  await notifyUser(req.user.id, { type: 'info', title: 'To-do updated', message: 'A to-do item was updated.', relatedId: String(todo._id), service: 'todo' });
   res.json({ message: 'To-do updated.', todo: cleanTodo(todo) });
 }));
 

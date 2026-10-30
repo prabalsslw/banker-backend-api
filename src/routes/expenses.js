@@ -80,7 +80,7 @@ router.post('/', asyncHandler(async (req, res) => {
     if (error.status === 409) return res.status(409).json({ message: error.message });
     throw error;
   }
-  await notifyUser(req.user.id, { type: 'info', title: 'Expense recorded', message: `${data.title} (${data.category}) — ৳${(data.amountPaisa / 100).toFixed(2)} deducted from your available balance.`, relatedId: String(expense._id) });
+  await notifyUser(req.user.id, { type: 'info', title: 'Expense recorded', message: `${data.title} (${data.category}) — ৳${(data.amountPaisa / 100).toFixed(2)} deducted from your available balance.`, relatedId: String(expense._id), service: 'expense' });
   res.status(201).json({ message: 'Expense recorded.', expense: publicExpense(expense) });
 }));
 router.patch('/:id', asyncHandler(async (req, res) => {
@@ -121,7 +121,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
       remark: 'Expense record deleted' });
   }
   await Expense.deleteOne({ _id: expense._id, ownerId: req.user.id });
-  await notifyUser(req.user.id, { type: 'success', title: 'Expense deleted', message: `${title} was deleted and the amount was returned to your available balance.`, relatedId: String(expense._id) });
+  await notifyUser(req.user.id, { type: 'success', title: 'Expense deleted', message: `${title} was deleted and the amount was returned to your available balance.`, relatedId: String(expense._id), service: 'expense' });
   res.json({ message: 'Expense deleted and amount returned.' });
 }));
 module.exports = router;

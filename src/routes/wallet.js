@@ -68,7 +68,7 @@ router.post('/deposit', asyncHandler(async (req, res) => {
   const sourceLabel = sourceName ? ` · ${sourceName}` : '';
   const description = `Deposit via ${method.trim()}${sourceLabel}${remark ? ` · ${remark}` : ''}`.slice(0, 200);
   await postWalletTransaction({ ownerId: req.user.id, amountPaisa, type: 'deposit', description, referenceKey: `deposit:${transactionId}`, allowNegative: true, transactionId, remark, sourceName, sourceReference });
-  await notifyUser(req.user.id, { type: 'success', title: 'Deposit recorded', message: `৳${(amountPaisa / 100).toFixed(2)} was added via ${method.trim()}. Transaction ID: ${transactionId}` });
+  await notifyUser(req.user.id, { type: 'success', title: 'Deposit recorded', message: `৳${(amountPaisa / 100).toFixed(2)} was added via ${method.trim()}. Transaction ID: ${transactionId}`, service: 'wallet' });
   res.status(201).json({ message: 'Deposit recorded.', transactionId, balance: (await getBalancePaisa(req.user.id)) / 100 });
 }));
 
@@ -82,7 +82,7 @@ router.post('/debit', asyncHandler(async (req, res) => {
   if (!user || !(await bcrypt.compare(pin, user.pinHash))) return res.status(401).json({ message: 'Incorrect PIN.' });
   const safeRef = typeof referenceKey === 'string' && /^[a-zA-Z0-9:_-]{4,120}$/.test(referenceKey) ? referenceKey : `manual-debit:${new mongoose.Types.ObjectId()}`;
   await postWalletTransaction({ ownerId: req.user.id, amountPaisa: -amountPaisa, type: 'adjustment', description: purpose, referenceKey: safeRef });
-  await notifyUser(req.user.id, { type: 'warning', title: 'Balance deducted', message: `৳${(amountPaisa / 100).toFixed(2)} was deducted for ${purpose}.` });
+  await notifyUser(req.user.id, { type: 'warning', title: 'Balance deducted', message: `৳${(amountPaisa / 100).toFixed(2)} was deducted for ${purpose}.`, service: 'wallet' });
   res.status(201).json({ message: 'Balance deducted.', balance: (await getBalancePaisa(req.user.id)) / 100 });
 }));
 

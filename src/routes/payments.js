@@ -77,7 +77,7 @@ router.post('/', asyncHandler(async (req, res) => {
     paymentReceivedDate: b.paymentReceivedDate ? parseDate(b.paymentReceivedDate) : null,
     isPaid: b.isPaid === true
   });
-  await notifyUser(req.user.id, { type: 'info', title: 'Sanchayapatra payment scheduled', message: `Payment #${payment.paymentNumber} was added to the schedule for ${parseDate(b.paymentDate).toISOString().slice(0, 10)}.`, relatedId: String(saving._id) });
+  await notifyUser(req.user.id, { type: 'info', title: 'Sanchayapatra payment scheduled', message: `Payment #${payment.paymentNumber} was added to the schedule for ${parseDate(b.paymentDate).toISOString().slice(0, 10)}.`, relatedId: String(saving._id), service: 'savings3Month' });
   res.status(201).json({ message: 'Payment created.', payment: publicPayment(payment) });
 }));
 
@@ -115,7 +115,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   });
   await current.save();
   const payment = await Payment.findById(current._id).select('+amountEncrypted +interestAmountEncrypted +creditedInterestAmountEncrypted');
-  await notifyUser(req.user.id, { type: 'payment', title: payment.isPaid ? 'Sanchayapatra payment received' : 'Sanchayapatra payment updated', message: `Payment #${payment.paymentNumber} was ${payment.isPaid ? `marked received with ৳${newCredited.toFixed(2)} credited to your available balance` : 'updated/returned to pending'}.`, relatedId: String(payment.savingId) });
+  await notifyUser(req.user.id, { type: 'payment', title: payment.isPaid ? 'Sanchayapatra payment received' : 'Sanchayapatra payment updated', message: `Payment #${payment.paymentNumber} was ${payment.isPaid ? `marked received with ৳${newCredited.toFixed(2)} credited to your available balance` : 'updated/returned to pending'}.`, relatedId: String(payment.savingId), service: 'savings3Month' });
   res.json({ message: 'Payment updated.', payment: publicPayment(payment) });
 }));
 
@@ -123,7 +123,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   if (!isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid payment ID.' });
   const payment = await Payment.findOneAndDelete({ _id: req.params.id, ownerId: req.user.id });
   if (!payment) return res.status(404).json({ message: 'Payment not found.' });
-  await notifyUser(req.user.id, { type: 'warning', title: 'Sanchayapatra payment deleted', message: `Payment #${payment.paymentNumber} was removed from the schedule.`, relatedId: String(payment.savingId) });
+  await notifyUser(req.user.id, { type: 'warning', title: 'Sanchayapatra payment deleted', message: `Payment #${payment.paymentNumber} was removed from the schedule.`, relatedId: String(payment.savingId), service: 'savings3Month' });
   res.json({ message: 'Payment deleted.' });
 }));
 module.exports = router;

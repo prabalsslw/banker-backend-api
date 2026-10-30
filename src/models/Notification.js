@@ -15,6 +15,7 @@ const notificationSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true, maxlength: 150 },
   message: { type: String, required: true, trim: true, maxlength: 2000 },
   relatedId: { type: String, default: null, maxlength: 100 },
+  service: { type: String, default: 'wallet', maxlength: 40 },
   isRead: { type: Boolean, default: false }
 }, { timestamps: true, versionKey: false });
 

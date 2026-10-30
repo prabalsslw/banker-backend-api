@@ -7,7 +7,7 @@ const { isValidPin, isNonEmptyString } = require('../utils/validators');
 const { normalizeEmail, encryptPrivateField, decryptPrivateField, lookupHash } = require('../utils/privateFields');
 const router = express.Router();
 router.use(authenticate);
-function publicUser(user) { return { id: user._id.toString(), name: user.name, phone: decryptPrivateField(user.phoneEncrypted), email: decryptPrivateField(user.emailEncrypted), biometricEnabled: user.biometricEnabled, notificationsEnabled: user.notificationsEnabled !== false, createdAt: user.createdAt }; }
+function publicUser(user) { return { id: user._id.toString(), name: user.name, phone: decryptPrivateField(user.phoneEncrypted), email: decryptPrivateField(user.emailEncrypted), biometricEnabled: user.biometricEnabled, notificationsEnabled: user.notificationsEnabled !== false, notificationPreferences: user.notificationPreferences || {}, createdAt: user.createdAt }; }
 
 router.get('/', asyncHandler(async (req, res) => {
   const user = await User.findById(req.user.id).select('+phoneEncrypted +emailEncrypted');
@@ -45,6 +45,26 @@ router.patch('/pin', asyncHandler(async (req, res) => {
   user.pinHash = await bcrypt.hash(newPin, 12);
   await user.save();
   res.json({ message: 'PIN changed successfully. Log in again if requested.' });
+}));
+
+const NOTIFICATION_SERVICES = ['wallet', 'receivePayment', 'savings3Month', 'savings5Year', 'fdrMonthly', 'fdrQuarterly', 'fdrCumulative', 'dps', 'expense', 'stock', 'todo', 'reminder'];
+router.get('/notification-preferences', asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user.id).select('notificationsEnabled notificationPreferences').lean();
+  res.json({ enabled: user?.notificationsEnabled !== false, preferences: user?.notificationPreferences || {}, services: NOTIFICATION_SERVICES });
+}));
+router.patch('/notification-preferences', asyncHandler(async (req, res) => {
+  const { enabled, preferences } = req.body || {};
+  const updates = {};
+  if (enabled !== undefined) { if (typeof enabled !== 'boolean') return res.status(400).json({ message: 'enabled must be true or false.' }); updates.notificationsEnabled = enabled; }
+  if (preferences !== undefined) {
+    if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) return res.status(400).json({ message: 'preferences must be an object.' });
+    const clean = {};
+    for (const [key, value] of Object.entries(preferences)) { if (!NOTIFICATION_SERVICES.includes(key) || typeof value !== 'boolean') return res.status(400).json({ message: `Invalid notification preference: ${key}` }); clean[`notificationPreferences.${key}`] = value; }
+    Object.assign(updates, clean);
+  }
+  if (!Object.keys(updates).length) return res.status(400).json({ message: 'Provide enabled or preferences.' });
+  const user = await User.findByIdAndUpdate(req.user.id, { $set: updates }, { new: true }).select('notificationsEnabled notificationPreferences').lean();
+  res.json({ enabled: user.notificationsEnabled !== false, preferences: user.notificationPreferences || {} });
 }));
 
 router.patch('/notifications', asyncHandler(async (req, res) => {

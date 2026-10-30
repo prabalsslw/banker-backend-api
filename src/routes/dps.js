@@ -95,7 +95,7 @@ async function encash(account) {
   await postWalletTransaction({ ownerId: account.ownerId, amountPaisa: totals.maturityPaisa, type: 'dps_encashment', description: `DPS encashment: ${a.schemeName}`, referenceKey, allowNegative: true });
   account.status = 'Matured'; account.encashedAt = new Date(); account.encashmentAmountPaisa = totals.maturityPaisa;
   await account.save();
-  await notifyUser(account.ownerId, { type: 'success', title: 'DPS encashed', message: `${a.schemeName} was encashed. ${paisaToMoney(totals.maturityPaisa).toFixed(2)} Tk was credited to your available balance.`, relatedId: String(account._id) });
+  await notifyUser(account.ownerId, { type: 'success', title: 'DPS encashed', message: `${a.schemeName} was encashed. ${paisaToMoney(totals.maturityPaisa).toFixed(2)} Tk was credited to your available balance.`, relatedId: String(account._id), service: 'dps' });
   return true;
 }
 function encryptedFields(body) {
@@ -126,7 +126,7 @@ router.post('/', asyncHandler(async (req, res) => {
   const doc = new DpsAccount({ ownerId: req.user.id, ...fields, startDate, maturityDate: addMonthsClamp(startDate, months), status: 'Active' });
   doc.payments = buildPayments(doc);
   try { await doc.save(); } catch (error) { if (error?.code === 11000) return res.status(409).json({ message: 'This DPS account number already exists.' }); throw error; }
-  await notifyUser(req.user.id, { type: 'success', title: 'DPS created', message: `${body.schemeName.trim()} was created. Monthly installment: ৳${Number(body.monthlyInstallment).toFixed(2)}; maturity date ${doc.maturityDate.toISOString().slice(0, 10)}.`, relatedId: String(doc._id) });
+  await notifyUser(req.user.id, { type: 'success', title: 'DPS created', message: `${body.schemeName.trim()} was created. Monthly installment: ৳${Number(body.monthlyInstallment).toFixed(2)}; maturity date ${doc.maturityDate.toISOString().slice(0, 10)}.`, relatedId: String(doc._id), service: 'dps' });
   res.status(201).json({ message: 'DPS created.', dps: publicDps(doc) });
 }));
 router.get('/:id', asyncHandler(async (req, res) => {
@@ -159,7 +159,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   doc.maturityDate = addMonthsClamp(doc.startDate, months); doc.payments = buildPayments(doc, oldPayments);
   try { await doc.save(); } catch (error) { if (error?.code === 11000) return res.status(409).json({ message: 'This DPS account number already exists.' }); throw error; }
   if (shouldEncash) { await encash(doc); const fresh = await DpsAccount.findById(doc._id).select(selectSensitive); return res.json({ message: 'DPS matured and proceeds credited to wallet.', dps: publicDps(fresh) }); }
-  await notifyUser(req.user.id, { type: 'info', title: 'DPS updated', message: `${a.schemeName} information was updated.`, relatedId: String(doc._id) });
+  await notifyUser(req.user.id, { type: 'info', title: 'DPS updated', message: `${a.schemeName} information was updated.`, relatedId: String(doc._id), service: 'dps' });
   res.json({ message: 'DPS updated.', dps: publicDps(doc) });
 }));
 router.post('/:id/encash', asyncHandler(async (req, res) => {
@@ -186,7 +186,7 @@ router.post('/:id/close', asyncHandler(async (req, res) => {
   const a = values(doc);
   await postWalletTransaction({ ownerId: req.user.id, amountPaisa: creditPaisa, type: 'dps_early_close', description: `Early closure of DPS: ${a.schemeName}`, referenceKey: `dps:${doc._id}:early-close` });
   doc.status = 'Closed'; doc.encashedAt = new Date(); doc.encashmentAmountPaisa = creditPaisa; await doc.save();
-  await notifyUser(req.user.id, { type: 'warning', title: 'DPS closed early', message: `${a.schemeName} was closed early. ৳${paisaToMoney(creditPaisa).toFixed(2)} was credited to available balance.`, relatedId: String(doc._id) });
+  await notifyUser(req.user.id, { type: 'warning', title: 'DPS closed early', message: `${a.schemeName} was closed early. ৳${paisaToMoney(creditPaisa).toFixed(2)} was credited to available balance.`, relatedId: String(doc._id), service: 'dps' });
   res.json({ message: 'DPS closed and early encashment credited.', dps: publicDps(doc) });
 }));
 
@@ -208,7 +208,7 @@ router.patch('/:id/payments/:paymentId', asyncHandler(async (req, res) => {
   if (!newPaisa) { payment.depositAmountPaisa = null; payment.deductionDate = null; payment.paidAt = null; payment.status = 'Pending'; }
   else { payment.depositAmountPaisa = newPaisa; payment.deductionDate = newDate; payment.paidAt = new Date(); payment.status = 'Paid'; }
   await doc.save();
-  const a = values(doc); await notifyUser(req.user.id, { type: 'payment', title: newPaisa ? 'DPS installment paid' : 'DPS installment reverted to pending', message: `${a.schemeName}: installment due ${payment.dueDate.toISOString().slice(0, 10)} is ${newPaisa ? `Paid (৳${paisaToMoney(newPaisa).toFixed(2)})` : 'Pending'}.`, relatedId: String(doc._id) });
+  const a = values(doc); await notifyUser(req.user.id, { type: 'payment', title: newPaisa ? 'DPS installment paid' : 'DPS installment reverted to pending', message: `${a.schemeName}: installment due ${payment.dueDate.toISOString().slice(0, 10)} is ${newPaisa ? `Paid (৳${paisaToMoney(newPaisa).toFixed(2)})` : 'Pending'}.`, relatedId: String(doc._id), service: 'dps' });
   res.json({ message: 'DPS installment updated.', dps: publicDps(doc), payment: publicDps(doc).payments.find(p => p.id === String(payment._id)) });
 }));
 module.exports = router;

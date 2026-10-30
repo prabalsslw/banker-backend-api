@@ -8,6 +8,7 @@ const userSchema = new mongoose.Schema({
   pinHash: { type: String, required: true, select: false },
   biometricEnabled: { type: Boolean, default: false },
   notificationsEnabled: { type: Boolean, default: true },
+  notificationPreferences: { type: mongoose.Schema.Types.Mixed, default: {} },
   isActive: { type: Boolean, default: true }
 }, { timestamps: true, versionKey: false });
 module.exports = mongoose.model('User', userSchema);
